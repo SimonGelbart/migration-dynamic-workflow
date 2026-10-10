@@ -2,7 +2,114 @@
 
 This document describes the complete intended workflow for migrating one legacy resource, in one place, so that everyone works towards the same design. It summarizes; it does not replace the canonical procedures in [the step documents](workflow.md), the persistence details in [the architecture](architecture.md), or the implementation status in [the plan](implementation-plan.md). When they disagree, the step document owns the procedure and the code owns what is actually executable; fix this document.
 
-Legend used in the diagrams: **implemented** stages are drawn with a solid border, *planned* stages with a dashed border. Planned behavior is the agreed design, not executable code. [Open questions](#open-questions) lists the parts that still need a decision.
+Legend used in the diagrams: **implemented** stages are drawn with a solid border, *planned* stages with a dashed border. Planned behavior is the agreed design, not executable code. [Open questions](#open-questions) lists the parts that still need a decision. Start with [the complete workflow](#0-complete-workflow-at-a-glance); the other sections zoom into one part each.
+
+## 0. Complete workflow at a glance
+
+The single picture of the whole design: every stage, gate, branch, loop and way back. Numbered sections below zoom into parts of it; the zoom markers (🔍) name the section. Dashed nodes are planned.
+
+```mermaid
+flowchart TD
+  %% ---------- Start and readiness ----------
+  start([Owner starts the resource-migration workflow]) --> insp[00 Inspect workspace<br/>config, 4 checkouts, record, fingerprint]
+  insp --> rs{Readiness status}
+  rs -- blocked --> fixws[Owner fixes config,<br/>checkout or record] --> insp
+  rs -- needs-initialization --> init[initialize<br/>create record v2] --> insp
+  rs -- needs-upgrade --> upg[upgrade<br/>keep resource.v1.json] --> insp
+  rs -- awaiting-decision --> dq
+  rs -- ready-for-discovery<br/>or ready-for-target --> fresh
+
+  %% ---------- Freshness gate, reused by every stage ----------
+  fresh{Sources changed since<br/>stage evidence?}
+  fresh -- yes: evidence stale --> s01
+  fresh -- "no: next incomplete stage" --> route{Next stage}
+  route -- 01 --> s01
+  route -- 02 --> s02
+  route -- 03+ --> s03
+
+  %% ---------- Discovery and target (implemented) ----------
+  subgraph D [🔍 Section 6: discovery and target - implemented]
+    s01[01 Legacy discovery<br/>2 read-only agents in parallel:<br/>pages + LDAP] --> chg01{Sources changed<br/>while agents ran?}
+    chg01 -- yes --> abort01[Save nothing,<br/>rerun on stable sources]
+    chg01 -- no --> val01[Validate findings<br/>reject invalid for review] --> save01[Lock, save baseline, unlock]
+    save01 --> sq{Scope question<br/>open?}
+    sq -- no --> s02
+    s02[02 Target definition<br/>1 agent: dispositions] --> val02[Validate against<br/>baseline finding IDs] --> save02[Lock, save target, unlock]
+    save02 --> tq{Target question<br/>open?}
+    tq -- no --> appr{Owner approves<br/>this revision?}
+  end
+  abort01 --> fresh
+  sq -- yes --> dq
+  tq -- yes --> dq
+  appr -- "no: requested changes" --> rerunT[Next run regenerates<br/>target with the answer] --> s02
+  appr -- approve --> s03
+
+  %% ---------- Decision loop ----------
+  subgraph Q [🔍 Section 7: decisions, pause and resume]
+    dq[Pause run at<br/>decision/resource/stage/id] --> ans[Owner answers<br/>npm run answer]
+    ans --> res[Resume same run<br/>reread config, record, sources]
+  end
+  res --> fresh
+
+  %% ---------- Contracts and package (planned) ----------
+  subgraph C [Contracts and package - planned]
+    s03[03 Contracts and validation<br/>rule matrix, operations, gaps]:::planned
+    s04[04 Shared package<br/>models + validators<br/>net10 + netstandard2.0]:::planned
+    s05[05 API acceptance<br/>TUnit/HttpClient, final behavior,<br/>may start red]:::planned
+    s03 --> s04 --> s05
+  end
+  s03 -. contract issue .-> s02
+  s04 -. semantic ambiguity .-> dq
+
+  %% ---------- Slice and review loop (planned) ----------
+  subgraph L [🔍 Section 8: implementation loop - planned]
+    pick[Pick next eligible slice]:::planned --> wl[Lock, record sources before]:::planned
+    wl --> s06[06 API slice<br/>implement + meaningful tests]:::planned
+    s06 --> wu[Record sources after, unlock]:::planned
+    wu --> chk[Run slice checks +<br/>previously passing cases]:::planned
+    chk --> cls{Each case:<br/>passed / expected-red /<br/>unexpected / infra}:::planned
+    cls -- regression or changed cause --> inv[Investigate]:::planned --> s06
+    cls -- infrastructure failure --> infra[Fix fixture or<br/>environment]:::planned --> chk
+    cls -- slice passes --> due{3 slices since review<br/>or concrete issue?}:::planned
+    due -- yes --> s07[07 Review<br/>no change is valid]:::planned
+    s07 -- bounded refactor --> wl
+    s07 -- nothing to change --> left
+    due -- no --> left{Required slices left?}:::planned
+    left -- yes --> pick
+  end
+  s05 --> pick
+  s06 -. real contract issue .-> s03
+  s06 -. missing fact changes behavior .-> dq
+
+  %% ---------- Completion ----------
+  subgraph F [Completion - planned]
+    s08[08 API completion<br/>all required cases on current sources]:::planned
+    s09[09 V2 integration<br/>copy pages, connect API,<br/>legacy/V2 flag]:::planned
+    s10[10 Resource verification<br/>reconcile scope and evidence]:::planned
+  end
+  left -- no --> s08
+  s08 -- any required case fails --> pick
+  s08 -- exclusion or behavior change --> dq
+  s08 -- all green --> s09
+  s09 -- UI outcome not in target --> dq
+  s09 -- API change needed --> pick
+  s09 -- all interactions verified --> s10
+  s10 -- evidence invalidated --> fresh
+  s10 -- unagreed exclusion --> dq
+  s10 -- complete --> done([Resource complete<br/>start next resource explicitly])
+
+  %% ---------- Owner edits at any time ----------
+  edit([Owner edits sources<br/>at any time]) -.-> fresh
+
+  classDef planned stroke-dasharray: 5 5
+```
+
+How to read it:
+
+- **Freshness gate.** Every resume and every new run passes through "Sources changed since stage evidence?". A change makes the affected evidence stale and that stage is redone; answers are kept.
+- **One decision loop.** Every stage that needs the owner goes through the same pause → answer → resume path, then back through the freshness gate.
+- **Ways back.** Dotted arrows reopen an earlier stage: a contract issue reopens target definition, a real contract issue found in a slice reopens contracts, a failing completion run returns to slices.
+- **Where it ends today.** The implemented part stops after target approval; `inspect` then reports `ready-for-contracts`.
 
 ## 1. Scope and actors
 
