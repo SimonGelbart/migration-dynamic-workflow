@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "repositories": {
+    "ihm": "../ihm",
+    "entities": "../entities",
+    "api": "../api",
+    "e2e": "../e2e"
+  },
+  "resourcesRoot": "./resources"
+}

@@ -1,0 +1,1 @@
+Follow [the repository development rules](../AGENTS.md). Use [the workflow canvas](../docs/workflow.md) and its linked step documents as the migration procedure specification. Check [the implementation plan](../docs/implementation-plan.md) before assuming a documented stage is executable. Generated extension files are build output; edit `src/` and rebuild.

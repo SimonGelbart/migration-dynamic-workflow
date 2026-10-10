@@ -1,0 +1,8 @@
+node_modules/
+.github/extensions/resource-migration/
+.local/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+.env
+.env.*
