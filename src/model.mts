@@ -13,7 +13,27 @@ export type RepositorySnapshot = {
   dirty: boolean;
   fingerprint: string;
 };
-export type ResourceRecord = {
+export const stageIds = ["01-legacy-discovery", "02-target-definition"] as const;
+export type StageId = (typeof stageIds)[number];
+export const stageStatuses = ["not-started", "in-progress", "awaiting-decision", "complete"] as const;
+export type StageStatus = (typeof stageStatuses)[number];
+export type StageState = {
+  status: StageStatus;
+  /** Workspace fingerprint the stage's evidence was produced from. */
+  basedOnFingerprint: string | null;
+  /** Paths relative to the resource directory. */
+  evidence: string[];
+  updatedAt: string | null;
+};
+export type Decision = {
+  id: string;
+  stage: StageId;
+  question: string;
+  source: string;
+  answer: string | null;
+  answeredAt: string | null;
+};
+export type ResourceRecordV1 = {
   schemaVersion: 1;
   id: string;
   stage: "legacy-discovery";
@@ -21,26 +41,64 @@ export type ResourceRecord = {
   createdAt: string;
   sourceFingerprint: string;
 };
+export type ResourceRecord = {
+  schemaVersion: 2;
+  id: string;
+  createdAt: string;
+  initialFingerprint: string;
+  revision: number;
+  stages: Record<StageId, StageState>;
+  decisions: Decision[];
+  upgradedFrom: string | null;
+};
+export type StageSummary = {
+  id: StageId;
+  status: StageStatus;
+  stale: boolean;
+  blocked: boolean;
+  evidence: string[];
+};
+export type InspectionStatus =
+  | "blocked" | "needs-initialization" | "needs-upgrade" | "ready-for-discovery"
+  | "awaiting-decision" | "ready-for-target" | "ready-for-contracts";
 export type Inspection = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   operation: "inspect";
-  status: "blocked" | "needs-initialization" | "ready-for-discovery";
+  status: InspectionStatus;
   workspacePath: string;
   repositories: RepositorySnapshot[];
   resourcePath: string;
-  resource: ResourceRecord | null;
+  resource: ResourceRecord | ResourceRecordV1 | null;
   sourceFingerprint: string | null;
   sourcesChangedSinceInitialization: boolean | null;
+  stages: StageSummary[];
+  openDecisions: Decision[];
   issues: Issue[];
-  nextStep: { id: "01-legacy-discovery"; implemented: false };
+  nextStep: { id: string; implemented: boolean };
   migrationComplete: false;
 };
 export type Initialization = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   operation: "initialize";
   status: "created" | "already-exists";
   resourcePath: string;
+  resource: ResourceRecord | ResourceRecordV1;
+  migrationComplete: false;
+};
+export type Upgrade = {
+  schemaVersion: 2;
+  operation: "upgrade";
+  status: "upgraded" | "already-current";
+  resourcePath: string;
+  preservedOriginal: string | null;
   resource: ResourceRecord;
+  migrationComplete: false;
+};
+export type Answer = {
+  schemaVersion: 2;
+  operation: "answer";
+  status: "recorded";
+  decision: Decision;
   migrationComplete: false;
 };
 
@@ -59,8 +117,9 @@ export function object(value: unknown, label: string): Record<string, unknown> {
 }
 
 export function keys(value: Record<string, unknown>, expected: string[], label: string): void {
-  if (Object.keys(value).some((key) => !expected.includes(key))) {
-    throw new WorkflowError("invalid-input", `${label} contains unsupported fields.`);
+  const unsupported = Object.keys(value).filter((key) => !expected.includes(key));
+  if (unsupported.length) {
+    throw new WorkflowError("invalid-input", `${label} contains unsupported fields: ${unsupported.join(", ")}. Expected: ${expected.join(", ")}.`);
   }
   for (const key of expected) {
     if (!Object.hasOwn(value, key)) {
