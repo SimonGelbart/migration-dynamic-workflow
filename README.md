@@ -75,6 +75,7 @@ The native integration needs a Copilot session eligible for dynamic workflows. S
 
 ## Continue development
 
+- [Workflow design](docs/design.md): the complete intended workflow in diagrams, with open questions.
 - [Implementation plan](docs/implementation-plan.md): ten increments, starting with this skeleton.
 - [Architecture](docs/architecture.md): modules, persistence and boundaries.
 - [Workflow canvas](docs/workflow.md): canonical procedures and recurring review loop.

@@ -1,6 +1,6 @@
 # Workflow canvas
 
-The canonical procedure for each step is linked below. Public documents describe the method; private resource artifacts describe the actual legacy behavior and agreed target. Skills will reference the owning step, code enforces eligible transitions, and verification supplies evidence. Document existence alone does not establish completion.
+The canonical procedure for each step is linked below. Public documents describe the method; private resource artifacts describe the actual legacy behavior and agreed target. Skills will reference the owning step, code enforces eligible transitions, and verification supplies evidence. Document existence alone does not establish completion. [The workflow design](design.md) shows the whole flow, states and decision loop in diagrams.
 
 | Step | Outcome |
 | --- | --- |
