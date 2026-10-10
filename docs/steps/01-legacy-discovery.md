@@ -4,7 +4,7 @@ Step ID: `01-legacy-discovery`. See [the workflow canvas](../workflow.md) for sh
 
 **Status**
 
-Planned.
+Implemented as the `discover` workflow operation, together with [target definition](02-target-definition.md). Its checks use a test stand-in for the workflow context; see [verification](../verification.md) for what has and has not run in a live Copilot session.
 
 **Purpose**
 
@@ -12,28 +12,30 @@ Build a thorough baseline of every workflow in the agreed resource boundary.
 
 **Inputs**
 
-Scoped resource, IHM source, linked pages and controls, available UI access, repository state and relevant existing V2 examples.
+An initialized schemaVersion 2 resource record, the four checkouts, relevant existing V2 examples and recorded owner decisions. Runtime UI access and Dev LDAP are not used by the current implementation.
 
 **Procedure**
 
-Trace pages/subpages, navigation, query strings, initial loads/postbacks, conditional fields, normalization, validation and messages. Follow actual LDAP filters, search scope, mappings and any additional filtering. Identify parent/child interactions and side effects. Attach evidence and classify findings as observed, code-confirmed, inferred or unresolved.
+The workflow rereads readiness, then starts two read-only agents in parallel: one for pages and controls, one for LDAP queries and mappings. Agents trace pages/subpages, navigation, query strings, initial loads/postbacks, conditional fields, normalization, validation and messages; LDAP filters, search scope, mappings and additional filtering; parent/child interactions and side effects. Each returns structured findings classified as observed, code-confirmed, inferred or unresolved, with source references and a coverage list. Agents must not edit, build or contact services.
+
+Code then checks the output before saving it. Every reference must name a known checkout and an existing regular file inside it; classified findings need evidence; unresolved findings need a focused question. Invalid findings are listed as rejected agent output for review, not silently dropped. If the source fingerprint changed while agents ran, nothing is saved.
 
 **Outputs**
 
-Private legacy.md plus a coverage inventory, evidence references and focused questions.
+Private `discovery/legacy.json` and `discovery/legacy.md` in the resource directory: coverage, findings with evidence, decisions and rejected output. Scope questions become decisions in `resource.json`.
 
 **Completion**
 
-Review significant branches against the page/operation inventory. Missing runtime observations and unknown behavior remain explicit. A long document or a file-existence check cannot prove completeness.
+Code moves the stage to complete only when its evidence is based on the current sources and no scope decision is open. Review significant branches against the coverage inventory. Missing runtime observations and unknown behavior remain explicit. A long document or a file-existence check cannot prove completeness; the [reference evaluation](../implementation-plan.md) checks quality.
 
 **Decisions**
 
-Ask about missing scope, contradictory behavior and inaccessible evidence when they affect coverage. Optional Dev LDAP exploration is read-only and explicitly configured.
+An unresolved finding marked as affecting scope pauses the run at `decision/<resource>/01-legacy-discovery/<decision>`. Record the answer with `npm run answer`, then resume the same run. Answers are applied to the existing evidence and passed to target definition; they do not regenerate discovery. If an answer widens the boundary, rerun discovery after changing the sources or scope that the agents read.
 
 **Recovery**
 
-Reuse valid findings; recheck affected evidence after source changes. Record corrections to historical facts separately from intentional V2 changes.
+Resuming reuses journaled agent output only for identical sources. A source change, including one made while paused, marks the evidence stale and discovery runs again; recorded answers are kept by question. Cancellation or an agent failure saves nothing. Record corrections to historical facts separately from intentional V2 changes.
 
 **Next**
 
-[Target definition](02-target-definition.md).
+[Target definition](02-target-definition.md), in the same run.

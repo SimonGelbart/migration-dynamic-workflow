@@ -34,6 +34,6 @@ The acceptance suite asserts final intended behavior. Known unfinished cases may
 
 Each slice has its own criteria and meaningful unit/integration evidence, even when a larger journey is still unfinished. Inspect applicable layer responsibilities without creating empty tests in every layer. All required resource API cases must pass before API completion and V2 integration.
 
-Manual edits between runs are expected. Recheck affected prerequisites and invalidate stale evidence; do not blindly reuse a checkpoint or reset user work. Versioned progress records describe verified outcomes, not agent confidence. The current skeleton has only an initialization fingerprint; later stages must implement their own evidence and resumption policies.
+Manual edits between runs are expected. Recheck affected prerequisites and invalidate stale evidence; do not blindly reuse a checkpoint or reset user work. Versioned progress records describe verified outcomes, not agent confidence. Discovery and target definition record the source fingerprint their evidence was based on, and become stale when it changes; later stages must implement their own evidence and resumption policies. See [the architecture](architecture.md) for how records, the workflow journal and pause checkpoints relate.
 
 Every step document uses Purpose, Inputs, Procedure, Outputs, Completion, Decisions, Recovery and Next fields, plus an honest implementation Status. A semantic review of coverage remains necessary even when structural checks pass.

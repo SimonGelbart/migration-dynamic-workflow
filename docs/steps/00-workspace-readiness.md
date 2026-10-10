@@ -16,7 +16,7 @@ A workspace JSON file with schemaVersion 1, four distinct Git checkout roots and
 
 **Procedure**
 
-Validate arguments and configuration. Resolve paths against the config file and canonicalize existing ancestors. Inspect each real checkout, including worktrees and dirty sources. Read the resource record if present and compare its initialization fingerprint. The separate initialize operation first performs these checks, then creates one complete private record only if absent.
+Validate arguments and configuration. Resolve paths against the config file and canonicalize existing ancestors. Inspect each real checkout, including worktrees and dirty sources. Read the resource record if present, compare its initialization fingerprint and summarize each stage as complete, stale or blocked, with open decisions. The separate initialize operation first performs these checks, then creates one complete schemaVersion 2 record only if absent. A schemaVersion 1 record is reported as needs-upgrade; the explicit upgrade operation preserves it as resource.v1.json before writing schemaVersion 2.
 
 **Outputs**
 
@@ -24,7 +24,7 @@ A structured inspection result, or an explicitly initialized resources/<id>/reso
 
 **Completion**
 
-Inspection returns all available repository snapshots and explicit issues. Initialization is idempotent, preserves existing records and cannot write inside the application checkouts. Blocked or invalid state is never promoted; ready-for-discovery still reports that discovery is unimplemented and migrationComplete is false.
+Inspection returns all available repository snapshots and explicit issues. Initialization is idempotent, preserves existing records and cannot write inside the application checkouts. Blocked or invalid state is never promoted, and migrationComplete is always false.
 
 **Decisions**
 
@@ -36,4 +36,4 @@ Rerun inspection freely. Repeated initialization preserves a valid record. Corru
 
 **Next**
 
-[Legacy discovery](01-legacy-discovery.md) once implemented. Until then, report the next planned step.
+[Legacy discovery](01-legacy-discovery.md), through the `discover` operation.

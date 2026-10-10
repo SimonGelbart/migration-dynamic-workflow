@@ -2,7 +2,7 @@
 
 A Copilot project extension for incrementally migrating a legacy Web Forms resource to an API-backed V2 implementation. The workflow canvas lives in [docs/workflow.md](docs/workflow.md), with one document per step.
 
-**Implemented:** workspace inspection and explicit resource initialization. **Planned:** discovery, target decisions, contracts, package/API implementation, recurring refactoring, and V2 integration. This skeleton does not migrate application code or connect to LDAP.
+**Implemented:** workspace inspection, explicit resource initialization and upgrade, and legacy discovery plus target definition (`discover`) with owner decision checkpoints. **Planned:** contracts, package/API implementation, recurring refactoring, and V2 integration. The workflow does not modify application code or connect to LDAP. Discovery has not yet been verified in a live Copilot session.
 
 The primary target is Windows. The orchestration and synthetic fixtures can also be developed on Linux. Passing these checks does not establish that the legacy .NET Framework application can build there.
 
@@ -32,7 +32,7 @@ npm run inspect -- --workspace "C:\work\migration-private\workspace.json" --reso
 
 Use a lowercase resource ID beginning with a letter, then letters, digits or hyphens (maximum 64 characters). Windows device names are rejected on all platforms. Resource records must be separate from the application checkouts. Initialization creates `<resourcesRoot>/<id>/resource.json` only when the prerequisites pass; repeating it preserves the existing record. An invalid record is reported, never repaired by overwriting it.
 
-Inspection returns `blocked`, `needs-initialization`, or `ready-for-discovery`. The last outcome means the configuration and initial record are ready; discovery itself is not implemented. Every result explicitly reports `migrationComplete: false`. CLI exit codes: 0 for a completed operation, 2 for a blocked inspection, and 1 for invalid input or an operation failure. Initialization still leaves the resource at `legacy-discovery` / `not-started`.
+Inspection returns `blocked`, `needs-initialization`, `needs-upgrade`, `ready-for-discovery`, `awaiting-decision`, `ready-for-target` or `ready-for-contracts`, with each stage's state (complete, stale or blocked) and the open decisions. Every result explicitly reports `migrationComplete: false`. CLI exit codes: 0 for a completed operation, 2 for a blocked inspection, and 1 for invalid input or an operation failure. A record created before schemaVersion 2 must be upgraded explicitly with `npm run upgrade`; the original is kept as `resource.v1.json`.
 
 ## Load the native Copilot workflow
 
@@ -61,7 +61,15 @@ Replace the placeholder with the real input-file path, keeping the leading `@`. 
 }
 ```
 
-Use `operation: "initialize"` only when you intend to create the private record. Both operations execute deterministic local code and spawn no agents. Rebuild after source changes and reload extensions with `/clear` or restart the session. A workflow run marked completed means its inspection/initialization finished, not that the migration did.
+Use `operation: "initialize"` only when you intend to create the private record. `inspect`, `initialize` and `upgrade` execute deterministic local code and spawn no agents.
+
+`operation: "discover"` runs legacy discovery and target definition. It starts two read-only agents (pages and controls; LDAP queries and mappings), then one target agent, and writes only to the private resource directory. When an owner decision is needed, the run pauses and logs the decision ID. Record the answer and resume the same run:
+
+```sh
+npm run answer -- --workspace <workspace.json> --resource <id> --decision <decision-id> --answer "<text>"
+```
+
+The target needs an explicit `approve` answer for its exact revision; any other answer is treated as requested changes for the next run. Edits made while a run is paused are detected on resume and the stale evidence is rediscovered. Rebuild after source changes and reload extensions with `/clear` or restart the session. A workflow run marked completed means its inspection/initialization finished, not that the migration did.
 
 The native integration needs a Copilot session eligible for dynamic workflows. See [verification and limitations](docs/verification.md) for what has actually been exercised and the remaining smoke check.
 

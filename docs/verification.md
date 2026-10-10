@@ -2,7 +2,9 @@
 
 Run `npm ci` followed by `npm run check`. The check type-checks against the actual pinned SDK, builds JavaScript, runs real filesystem/Git/CLI tests, and checks documentation links and step structure. `npm run demo` exercises the foundation with synthetic local repositories. Test fixtures live in ignored `.local/test-fixtures/` and are removed after each case.
 
-Coverage includes relative paths and spaces, JSON/version errors, invalid identifiers, real worktrees, missing repositories, read-only inspection, concurrent idempotent initialization, corruption preservation, output boundaries and changes to staged/unstaged/untracked source. Workflow tests use the real SDK's definition handle and call its body with a small test context; that is not a live Copilot run.
+Coverage includes relative paths and spaces, JSON/version errors, invalid identifiers, real worktrees, missing repositories, read-only inspection, concurrent idempotent initialization, corruption preservation, output boundaries and changes to staged/unstaged/untracked source. Record checks cover code-owned transitions, the explicit schemaVersion 1 upgrade, the writer lock and write-once answers. Discovery checks cover pause and resume through both decisions, an unanswered resume, a hand edit while paused, cancellation mid-stage, an agent changing sources, a failed agent and a rejected target. The documentation check also requires each step's Implemented status to match `implementedSteps` in the code.
+
+Workflow tests call the real definition with a stand-in context (`workflowHarness` in `tests/helpers.mjs`) that models the documented journal and one-shot pause semantics, and returns scripted agent output. That is not a live Copilot run and says nothing about the quality of real agent output.
 
 ## Live Copilot smoke check
 
@@ -11,11 +13,21 @@ Coverage includes relative paths and spaces, JSON/version errors, invalid identi
 3. List the available dynamic workflows and explicitly invoke `resource-migration` with the demo's input JSON.
 4. Verify a real native run ID, the Workspace readiness phase and the returned `ready-for-discovery` result. Inspect `/workflows`; a plain standalone command is insufficient evidence.
 5. Change a synthetic source file and invoke inspection again. Verify the changed-source flag. Explicitly invoke initialization again and verify `already-exists` without replacing the resource record.
-6. Record the CLI version, platform, actual command, run ID/outcome and any compatibility limitation in a private verification note. Keep credentials and private paths out of this repository.
+6. Dynamic features: add a small synthetic page to the demo `ihm` checkout and invoke `operation: "discover"`. Verify two discovery agents, saved `discovery/` evidence or a paused run at a `decision/...` checkpoint, then `npm run answer` and a resume of the same run ID. Edit a synthetic source while paused, resume, and verify the rediscovery log line. Answer the target approval and verify `complete`. Record whether `ctx.step`, agent memoization and one-shot pause behaved as [the architecture](architecture.md) assumes.
+7. Record the CLI version, platform, actual command, run ID/outcome and any compatibility limitation in a private verification note. Keep credentials and private paths out of this repository.
 
 Registration code follows the SDK's [workflow authoring guide](https://github.com/github/copilot-sdk/blob/main/nodejs/docs/workflows.md), [workflow types](https://github.com/github/copilot-sdk/blob/main/nodejs/src/workflow.ts), and [extension API](https://github.com/github/copilot-sdk/blob/main/nodejs/src/extension.ts). See also [GitHub's workflow instructions](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-dynamic-workflows).
 
 ## Current verification record
+
+Discovery increment, local verification on 10 October 2026:
+
+| Check | Result |
+| --- | --- |
+| Linux, Node 22, TypeScript 6.0.3, SDK 1.0.19 | Type-check, build, 34 tests and documentation check passed |
+| Native smoke check, including the dynamic-feature step | Not run: Copilot CLI was not installed in this environment and no signed-in session was available |
+| Runtime SDK version supplied by Copilot | Unknown until the smoke check. If it differs from 1.0.19, pin the dev dependency to it rather than adding a runtime shim |
+| Real discovery agent output, reference-resource evaluation | Not run; requires a signed-in session and the private applications |
 
 Initial local verification on 10 October 2026:
 
