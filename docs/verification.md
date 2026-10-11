@@ -20,6 +20,16 @@ Registration code follows the SDK's [workflow authoring guide](https://github.co
 
 ## Current verification record
 
+Remaining scope and output-limit fixes:
+
+| Check | Result |
+| --- | --- |
+| Linux, Node 24.19.0, TypeScript 6.0.3, SDK 1.0.19 | Type-check, build, 61 tests and documentation check passed; 19 documentation files checked |
+| Target-stage scope changes | Target question answers and rejection feedback reopen discovery before target generation; tested in resumed and new runs. Identical rejected proposals remain rejected |
+| Output limits | Oversized findings, coverage and target requirements fail explicitly. The 501st edited requirement stays on disk without applying an earlier approval; exact limits are accepted in full |
+| Earlier routing policy | Existing evidence is rechecked under the new policy before reporting completion |
+| Native Copilot and new Windows verification | Native smoke check remains unavailable locally; the CI matrix checks the pushed commit on Windows and Linux |
+
 Review fixes, local verification on 11 October 2026:
 
 | Check | Result |
@@ -28,6 +38,8 @@ Review fixes, local verification on 11 October 2026:
 | Earlier failure reproductions | Regression tests confirm changed targets need the corresponding approval, scope answers trigger investigation, missing/edited artifacts invalidate readiness, rejected/empty output cannot complete, and linked artifact paths cannot redirect writes |
 | Native Copilot smoke check and Windows execution | Not run locally: Copilot CLI unavailable; Windows requires the CI matrix or a Windows environment |
 | Private application and development LDAP checks | Not run; live LDAP integration remains planned |
+
+GitHub Actions run 14 on commit `7bdb0df` subsequently passed `npm run check` and `npm run demo` on both Ubuntu and Windows. This verifies the previous review fixes in the CI matrix, not native Copilot behavior or private application compatibility.
 
 Discovery increment, local verification on 10 October 2026:
 

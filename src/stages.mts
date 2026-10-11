@@ -13,15 +13,25 @@ export function contentDigest(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function decisionInputs(record: ResourceRecord, stage: StageId): Decision[] {
-  return record.decisions.filter((d) => d.answer !== null && (stage === "01-legacy-discovery"
-    ? d.stage === stage
-    : !(d.id.startsWith("approve-") && d.answer!.trim().toLowerCase() === "approve"))).sort((a, b) => a.id.localeCompare(b.id));
+/** Clarifications and rejection feedback can widen scope at either stage. Investigate them first. */
+export function decisionInputs(record: ResourceRecord): Decision[] {
+  return record.decisions.filter((d) => d.answer !== null && !(d.id.startsWith("approve-") && d.answer.trim().toLowerCase() === "approve"))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** Rejection feedback alone must not change the baseline identity when its facts are unchanged. */
+export function scopeInputDigest(record: ResourceRecord): string {
+  return contentDigest(JSON.stringify({
+    decisions: decisionInputs(record).filter((d) => !d.id.startsWith("approve-")).map(({ id, question, answer }) => ({ id, question, answer })),
+    baseline: null,
+  }));
 }
 
 export function stageInputDigest(record: ResourceRecord, stage: StageId): string {
   return contentDigest(JSON.stringify({
-    decisions: decisionInputs(record, stage).map(({ id, question, answer }) => ({ id, question, answer })),
+    // Reestablish evidence produced under the earlier scope-routing and truncation policy.
+    policyVersion: 2,
+    decisions: decisionInputs(record).map(({ id, question, answer }) => ({ id, question, answer })),
     baseline: stage === "02-target-definition" ? record.stages["01-legacy-discovery"].evidenceDigests[stageFiles["01-legacy-discovery"].json] ?? null : null,
   }));
 }

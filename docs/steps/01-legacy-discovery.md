@@ -20,6 +20,8 @@ The workflow rereads readiness, then starts two read-only agents in parallel: on
 
 Code then checks the output before saving it. Every reference must name a known checkout and an existing regular file that resolves inside it; classified findings need evidence; unresolved findings need a focused question. Invalid findings are listed as rejected agent output for review and keep the stage in progress. Empty findings or an empty coverage inventory also prevent progression; an excluded or empty resource needs an explicit evidence-backed scope finding and target disposition. If the source fingerprint or decision inputs changed while agents ran, nothing is saved.
 
+Each agent may return at most 300 findings and 500 coverage entries. Exceeding either limit fails with `agent-output-too-large` before saving anything; the workflow never accepts a truncated baseline. Agents must surface the need to split an oversized scope as a focused question rather than silently omit behavior.
+
 **Outputs**
 
 Private `discovery/legacy.json` and `discovery/legacy.md` in the resource directory: coverage, findings with evidence, decisions and rejected output. Scope questions become decisions in `resource.json`.
@@ -30,11 +32,11 @@ Code moves the stage to complete only when its evidence is based on the current 
 
 **Decisions**
 
-An unresolved finding marked as affecting scope pauses the run at `decision/<resource>/01-legacy-discovery/<decision>`. Record the answer with `npm run answer`, then resume the same run or start a new run. Answered scope decisions become discovery prompt inputs and change the discovery cache key, so the agents investigate the clarified boundary even when source files are unchanged. Answers are also passed to target definition.
+An unresolved finding marked as affecting scope pauses the run at `decision/<resource>/01-legacy-discovery/<decision>`. Record the answer with `npm run answer`, then resume the same run or start a new run. Clarifications and rejection feedback from either discovery or target definition become discovery prompt inputs and change the discovery cache key. The agents investigate the clarified boundary even when source files are unchanged, before the target can be regenerated or approved. This conservative policy also investigates target feedback that ultimately leaves scope unchanged. Successful approvals do not trigger another investigation. Target intent remains distinct from source-confirmed legacy behavior.
 
 **Recovery**
 
-Resuming reuses journaled agent output only for identical sources and scope inputs. Source or scope changes, or missing/edited discovery artifacts, cause rediscovery; recorded answers are kept by question. Older version-2 records without artifact or input digests must reestablish evidence. Cancellation or an agent failure saves nothing. Rejected output is saved for diagnosis but never completes a stage; start a new run to obtain corrected agent output. Linked artifact paths block reads and writes. Record corrections to historical facts separately from intentional V2 changes.
+Resuming reuses journaled agent output only for identical sources and decision inputs under the current validation policy. Source or input changes, or missing/edited discovery artifacts, cause rediscovery; recorded answers are kept by question. Older version-2 records without artifact/input digests or produced under the earlier routing/truncation policy must reestablish evidence. Cancellation, oversized output or an agent failure saves nothing. Rejected findings are saved for diagnosis but never complete a stage; start a new run to obtain corrected agent output. Linked artifact paths block reads and writes. Record corrections to historical facts separately from intentional V2 changes.
 
 **Next**
 

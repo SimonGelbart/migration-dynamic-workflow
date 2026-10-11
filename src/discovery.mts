@@ -5,7 +5,7 @@ import type { JsonValue, WorkflowContext, WorkflowJsonSchema } from "@github/cop
 import { inspectWorkspace, updateResource } from "./inspect.mjs";
 import { hasCode, object, repositoryRoles, WorkflowError, type Decision, type Inspection, type RepositoryRole, type ResourceRecord, type StageId, type StageSummary } from "./model.mjs";
 import { privateFilePath, replaceFile } from "./resource.mjs";
-import { checkStageEvidence, contentDigest, decisionInputs, isBlocked, isCurrent, mergeDecisions, openDecisions, pauseKey, stageFiles, stageInputDigest, transition } from "./stages.mjs";
+import { checkStageEvidence, contentDigest, decisionInputs, isBlocked, isCurrent, mergeDecisions, openDecisions, pauseKey, scopeInputDigest, stageFiles, stageInputDigest, transition } from "./stages.mjs";
 import { canonicalPath, isWithin } from "./workspace.mjs";
 
 export type StageContext = Pick<WorkflowContext, "agent" | "step" | "pause" | "parallel" | "phase" | "log" | "signal" | "runId">;
@@ -50,6 +50,7 @@ export const discoveryAreas = [
 const baselineFiles = stageFiles["01-legacy-discovery"];
 const targetFiles = stageFiles["02-target-definition"];
 const maxRounds = 8;
+export const outputLimits = { coverage: 500, findings: 300, requirements: 500 } as const;
 
 const findingsSchema: WorkflowJsonSchema = {
   type: "object",
@@ -136,10 +137,13 @@ async function checkEvidence(value: unknown, repositories: Record<RepositoryRole
 export async function validateFindings(area: string, output: unknown, repositories: Record<RepositoryRole, string>): Promise<{ coverage: string[]; findings: Finding[]; rejected: Rejection[] }> {
   const value = object(output, `${area} discovery output`);
   if (!Array.isArray(value.findings) || !Array.isArray(value.coverage)) throw new WorkflowError("invalid-agent-output", `${area} discovery output must contain findings and coverage arrays.`);
-  const coverage = value.coverage.map((item) => text(item, 500)).filter((item): item is string => item !== null).slice(0, 500);
+  if (value.findings.length > outputLimits.findings || value.coverage.length > outputLimits.coverage) {
+    throw new WorkflowError("agent-output-too-large", `${area} output exceeds ${outputLimits.findings} findings or ${outputLimits.coverage} coverage entries. Split the investigation into bounded output; nothing is truncated or accepted.`);
+  }
+  const coverage = value.coverage.map((item) => text(item, 500)).filter((item): item is string => item !== null);
   const findings: Finding[] = [];
   const rejected: Rejection[] = [];
-  for (const [index, raw] of value.findings.slice(0, 300).entries()) {
+  for (const [index, raw] of value.findings.entries()) {
     const reject = (reason: string) => { rejected.push({ area, index, reason }); };
     const item = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
     if (!item) { reject("finding must be an object"); continue; }
@@ -169,10 +173,13 @@ export async function validateFindings(area: string, output: unknown, repositori
 export function validateTarget(output: unknown, baseline: Baseline): { requirements: Requirement[]; exclusions: string[]; rejected: Rejection[] } {
   const value = object(output, "target output");
   if (!Array.isArray(value.requirements) || !Array.isArray(value.exclusions)) throw new WorkflowError("invalid-agent-output", "Target output must contain requirements and exclusions arrays.");
+  if (value.requirements.length > outputLimits.requirements) {
+    throw new WorkflowError("agent-output-too-large", `Target output exceeds ${outputLimits.requirements} requirements. Split it into bounded output; nothing is truncated or approved.`);
+  }
   const known = new Set(baseline.findings.map((f) => f.id));
   const requirements: Requirement[] = [];
   const rejected: Rejection[] = [];
-  for (const [index, raw] of value.requirements.slice(0, 500).entries()) {
+  for (const [index, raw] of value.requirements.entries()) {
     const reject = (reason: string) => { rejected.push({ area: "target", index, reason }); };
     const item = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
     if (!item) { reject("requirement must be an object"); continue; }
@@ -203,7 +210,9 @@ export function discoveryPrompt(resourceId: string, area: (typeof discoveryAreas
     "Do not edit, create, delete, format, build or commit anything in these checkouts, and do not contact LDAP or other services. Any source change invalidates this run.",
     `Checkouts:\n${repositoryList(inspection)}`,
     "Identify the pages and operations belonging to this resource. If the resource boundary is unclear, report an unresolved finding with affectsScope true and a focused question.",
-    `Investigate the scope specified by these recorded owner answers, including any newly included pages, controls or operations. Do not merely append the answers to previous findings.\n${JSON.stringify(inputs.map(({ id, question, answer }) => ({ id, question, answer })))}`,
+    `Investigate the scope specified by these recorded owner answers, including any newly included pages, controls or operations. Target clarifications and rejection feedback may expand scope too. Do not merely append the answers to previous findings.\n${JSON.stringify(inputs.map(({ id, stage, question, answer }) => ({ id, stage, question, answer })))}`,
+    "Target-stage answers describe intended V2 behavior. Use them to identify relevant legacy evidence, while recording what the source actually does. Requested V2 changes must not become invented legacy facts.",
+    `Return at most ${outputLimits.findings} findings and ${outputLimits.coverage} coverage entries. If the investigation exceeds these limits, report an unresolved scope finding explaining the need to split it; do not silently omit behavior.`,
     "Return JSON only. coverage lists every page, control group or operation you inspected. Each finding states one behavior and is classified as:",
     "observed (seen at runtime), code-confirmed (read directly in source), inferred (reasoned from indirect evidence) or unresolved (unknown; ask a question).",
     "Evidence uses paths relative to the named checkout and must exist. Set affectsScope true only when the answer changes what belongs to the migration.",
@@ -216,6 +225,7 @@ export function targetPrompt(resourceId: string, baseline: Baseline, inputs: Dec
     "Do not edit any files. Return JSON only.",
     "Give every requirement a disposition: preserve, change, fix, remove or question. Reference baseline finding IDs. Use question, with a focused question, when the owner must decide intended behavior, contract semantics or material scope.",
     "List explicit exclusions. Do not rewrite the historical baseline; record intentional differences as change, fix or remove.",
+    `Return at most ${outputLimits.requirements} requirements. If the target cannot fit, report a focused question about splitting the scope rather than silently omitting requirements.`,
     `Baseline findings:\n${JSON.stringify(baseline.findings)}`,
     `Owner decisions to apply:\n${JSON.stringify(inputs.map(({ id, question, answer }) => ({ id, question, answer })))}`,
   ].join("\n\n");
@@ -287,6 +297,7 @@ function loadedTarget(output: unknown, baseline: Baseline, resourceId: string): 
   }
   const checked = validateTarget(value, baseline);
   if (checked.rejected.length || !checked.requirements.length
+    || checked.requirements.length !== value.requirements.length
     || checked.requirements.some((requirement, index) => object((value.requirements as unknown[])[index], "saved requirement").id !== requirement.id)
     || JSON.stringify(checked.exclusions) !== JSON.stringify(value.exclusions)) {
     throw new WorkflowError("invalid-stage-evidence", "Saved target requirements or exclusions are invalid; no approval can be applied.");
@@ -385,7 +396,7 @@ export async function discoverResource(ctx: StageContext, workspaceFile: string,
           ctx.log("Sources changed, scope answers changed, or discovery evidence is missing or edited. It will be rediscovered; recorded answers are kept.");
         }
         const short = fingerprint.slice(0, 12);
-        const inputs = decisionInputs(record, "01-legacy-discovery");
+        const inputs = decisionInputs(record);
         const outputs = await ctx.parallel(discoveryAreas.map((area) => () => ctx.agent(discoveryPrompt(resourceId, area, inspection, inputs), { label: `discovery:${area.id}:${short}:${legacyInputs.slice(0, 12)}`, schema: findingsSchema })));
         ctx.signal.throwIfAborted();
         const failed = discoveryAreas.filter((_, index) => outputs[index] === null || outputs[index] === undefined).map((area) => area.id);
@@ -395,10 +406,10 @@ export async function discoverResource(ctx: StageContext, workspaceFile: string,
         if (after.fingerprint !== fingerprint) throw new WorkflowError("sources-changed-during-discovery", "Sources changed while discovery agents ran. Nothing was saved; rerun discovery on stable sources.");
         const repositories = Object.fromEntries(inspection.repositories.map((r) => [r.role, r.path])) as Record<RepositoryRole, string>;
         // Scope answers and sources both participate in the journal key.
-        const baseline = await ctx.step(`discovery-baseline-v2-${fingerprint}-${legacyInputs}`, async () => {
+        const baseline = await ctx.step(`discovery-baseline-v3-${fingerprint}-${legacyInputs}`, async () => {
           const parts = await Promise.all(discoveryAreas.map((area, index) => validateFindings(area.id, outputs[index], repositories)));
           const result: Baseline = {
-            schemaVersion: 1, resourceId, fingerprint, inputDigest: legacyInputs,
+            schemaVersion: 1, resourceId, fingerprint, inputDigest: scopeInputDigest(record),
             coverage: Object.fromEntries(discoveryAreas.map((area, index) => [area.id, parts[index]!.coverage])),
             findings: parts.flatMap((p) => p.findings), rejected: parts.flatMap((p) => p.rejected),
           };
@@ -424,7 +435,7 @@ export async function discoverResource(ctx: StageContext, workspaceFile: string,
       const baseline = baselineSnapshot?.value ?? null;
       if (!baseline || baseline.fingerprint !== fingerprint || baselineSnapshot!.digest !== legacy.evidenceDigests[baselineFiles.json]) throw new WorkflowError("evidence-missing", `${baselineFiles.json} is missing or stale; rerun discovery.`);
       // Approvals are not regeneration inputs; rejections and answered questions are.
-      const inputs = decisionInputs(record, "02-target-definition");
+      const inputs = decisionInputs(record);
       const inputIds = inputs.map((d) => d.id).sort();
       const targetInputs = stageInputDigest(record, "02-target-definition");
       const baselineDigest = legacy.evidenceDigests[baselineFiles.json]!;

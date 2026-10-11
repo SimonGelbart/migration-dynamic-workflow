@@ -666,7 +666,8 @@ Rules:
 
 - The resource record is authoritative. A native checkpoint only says where a run stopped.
 - Configuration, record, decisions and Git state are never cached in the workflow journal.
-- Agent results and validated output are cached under keys containing source and decision-input digests; scope answers require another discovery pass.
+- Agent results and validated output are cached under keys containing source, decision-input and validation-policy digests; clarifications and rejection feedback from either stage require another discovery pass.
+- Discovery overflow beyond 300 findings or 500 coverage entries per agent, or target overflow beyond 500 requirements, fails explicitly. Saved targets are checked in full; no oversized tail is silently discarded.
 - Artifact hashes are reread before completion. Valid target edits receive a recomputed revision and require the corresponding approval; invalid edits cannot inherit approval.
 - Answers are never overwritten. A rejected target revision is answered with requested changes; the next run uses them.
 

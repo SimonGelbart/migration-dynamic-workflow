@@ -4,6 +4,8 @@ import path from "node:path";
 import test from "node:test";
 import { answerDecision, initializeResource, inspectWorkspace } from "../.github/extensions/resource-migration/inspect.mjs";
 import { definition } from "../.github/extensions/resource-migration/workflow.mjs";
+import { outputLimits, validateFindings, validateTarget } from "../.github/extensions/resource-migration/discovery.mjs";
+import { contentDigest } from "../.github/extensions/resource-migration/stages.mjs";
 import { commit, fixture, treeBytes, workflowHarness } from "./helpers.mjs";
 
 const pagesOutput = {
@@ -155,6 +157,7 @@ test("a rejected target revision is reported and the next run revises it using t
   await answerDecision(f.configPath, "demo", approval.id, "Also show the account's last logon.");
   const rejected = await run(h.attempt());
   assert.equal(rejected.status, "target-rejected");
+  assert.equal(h.agentCalls.filter((c) => c.options.label.startsWith("discovery:")).length, 4, "rejection feedback is investigated before revising the target");
 
   const revised = workflowHarness(standardAgents({
     "discovery:ldap": async () => ({ coverage: [], findings: [] }),
@@ -370,4 +373,154 @@ test("a target agent cannot save evidence after changing the sources", async (t)
   }));
   await assert.rejects(run(h.attempt()), { code: "stage-inputs-changed" });
   await assert.rejects(access(path.join(resourceDir, "target")), { code: "ENOENT" });
+});
+
+function editScopeAgents(answer) {
+  return standardAgents({
+    "discovery:ldap": async () => ({ coverage: [], findings: [] }),
+    "discovery:pages": async (prompt) => {
+      if (!prompt.includes(answer)) return structuredClone(pagesOutput);
+      assert.match(prompt, /02-target-definition/);
+      return { coverage: ["Pages/Users.aspx", "Pages/Edit.aspx"], findings: [...structuredClone(pagesOutput.findings), {
+        statement: "The edit page contains an account field.", classification: "code-confirmed",
+        evidence: [{ repository: "ihm", path: "Pages/Edit.aspx", line: 1 }], question: null, affectsScope: false,
+      }] };
+    },
+    "target": async (prompt) => {
+      if (prompt.includes(answer)) {
+        assert.match(prompt, /pages-2/);
+        return { requirements: [{ findingIds: ["pages-2"], disposition: "preserve", requirement: "Migrate the edit page and its account field.", question: null }], exclusions: [] };
+      }
+      return { requirements: [{ findingIds: ["pages-1"], disposition: "question", requirement: "Decide whether the existing edit page belongs to the migration.", question: "Include the existing edit page and its child controls?" }], exclusions: [] };
+    },
+  });
+}
+
+test("target-stage scope answers reopen discovery in resumed and new runs", async (t) => {
+  for (const newRun of [false, true]) await t.test(newRun ? "new run" : "resumed run", async (t) => {
+    const { f, run, resourceDir } = await prepared(t);
+    await commit(f.repositories.ihm, "Pages/Edit.aspx", "<asp:TextBox ID=\"Account\" />\n");
+    const answer = "Yes, include the existing edit page and child controls.";
+    const initial = workflowHarness(editScopeAgents(answer));
+    await assert.rejects(run(initial.attempt()), isPause);
+    const before = await inspectWorkspace(f.configPath, "demo");
+    assert.equal(before.openDecisions[0].stage, "02-target-definition");
+    await answerDecision(f.configPath, "demo", before.openDecisions[0].id, answer);
+    const stale = await inspectWorkspace(f.configPath, "demo");
+    assert.equal(stale.sourceFingerprint, before.sourceFingerprint);
+    assert.equal(stale.status, "ready-for-discovery");
+    assert.equal(stale.stages[0].stale, true);
+    assert.equal(stale.stages[1].blocked, true);
+
+    const resumed = newRun ? workflowHarness(editScopeAgents(answer)) : initial;
+    await assert.rejects(run(resumed.attempt()), isPause);
+    assert.equal(resumed.agentCalls.filter((c) => c.options.label.startsWith("discovery:")).length, newRun ? 2 : 4);
+    const baseline = JSON.parse(await readFile(path.join(resourceDir, "discovery/legacy.json"), "utf8"));
+    assert.ok(baseline.findings.some((finding) => finding.evidence.some((e) => e.path === "Pages/Edit.aspx")));
+    assert.ok(baseline.findings.every((finding) => !finding.statement.includes("Migrate")), "target intent is kept separate from legacy facts");
+    const approval = (await inspectWorkspace(f.configPath, "demo")).openDecisions[0];
+    assert.match(approval.id, /^approve-/);
+    await answerDecision(f.configPath, "demo", approval.id, "approve");
+    assert.equal((await run(resumed.attempt())).status, "complete");
+  });
+});
+
+test("scope expansion in target rejection feedback is investigated before new approval", async (t) => {
+  const { f, run, resourceDir } = await prepared(t);
+  await commit(f.repositories.ihm, "Pages/Edit.aspx", "<asp:TextBox ID=\"Account\" />\n");
+  const answer = "Also include the existing edit page and child controls.";
+  const scoped = editScopeAgents(answer);
+  const h = workflowHarness(async (prompt, options, controller) => {
+    if (options.label.startsWith("target:") && !prompt.includes(answer)) return structuredClone(targetOutput);
+    return scoped(prompt, options, controller);
+  });
+  await assert.rejects(run(h.attempt()), isPause);
+  const original = (await inspectWorkspace(f.configPath, "demo")).openDecisions[0];
+  await answerDecision(f.configPath, "demo", original.id, answer);
+  await assert.rejects(run(h.attempt()), isPause);
+  assert.equal(h.agentCalls.filter((c) => c.options.label.startsWith("discovery:")).length, 4);
+  const baseline = JSON.parse(await readFile(path.join(resourceDir, "discovery/legacy.json"), "utf8"));
+  assert.ok(baseline.coverage.pages.includes("Pages/Edit.aspx"));
+  const next = (await inspectWorkspace(f.configPath, "demo")).openDecisions[0];
+  assert.notEqual(next.id, original.id);
+  await answerDecision(f.configPath, "demo", next.id, "approve");
+  assert.equal((await run(h.attempt())).status, "complete");
+});
+
+test("discovery rejects overflowing findings and coverage without saving a truncated baseline", async (t) => {
+  for (const area of ["findings", "coverage"]) await t.test(area, async (t) => {
+    const { run, resourceDir } = await prepared(t);
+    const before = await readFile(path.join(resourceDir, "resource.json"), "utf8");
+    const output = structuredClone(pagesOutput);
+    if (area === "findings") {
+      output.findings = [...Array.from({ length: outputLimits.findings }, () => structuredClone(pagesOutput.findings[0])),
+        { statement: "Scope unknown.", classification: "unresolved", evidence: [], question: "Include the edit page?", affectsScope: true }];
+    } else output.coverage = Array.from({ length: outputLimits.coverage + 1 }, (_, i) => `Operation ${i}`);
+    const h = workflowHarness(standardAgents({ "discovery:pages": async () => output, "discovery:ldap": async () => ({ coverage: [], findings: [] }) }));
+    await assert.rejects(run(h.attempt()), { code: "agent-output-too-large" });
+    assert.equal(await readFile(path.join(resourceDir, "resource.json"), "utf8"), before);
+    await assert.rejects(access(path.join(resourceDir, "discovery")), { code: "ENOENT" });
+    assert.equal(h.agentCalls.length, 2);
+  });
+});
+
+test("an overflowing target agent result never creates approval or saves a partial target", async (t) => {
+  const { f, run, resourceDir } = await prepared(t);
+  const h = workflowHarness(standardAgents({
+    "discovery:ldap": async () => ({ coverage: [], findings: [] }),
+    "target": async () => ({ requirements: Array.from({ length: outputLimits.requirements + 1 }, () => structuredClone(targetOutput.requirements[0])), exclusions: [] }),
+  }));
+  await assert.rejects(run(h.attempt()), { code: "agent-output-too-large" });
+  const after = await inspectWorkspace(f.configPath, "demo");
+  assert.equal(after.stages[1].status, "not-started");
+  assert.equal(after.openDecisions.length, 0);
+  await assert.rejects(access(path.join(resourceDir, "target")), { code: "ENOENT" });
+});
+
+test("a 501st saved target requirement is preserved and cannot inherit the old approval", async (t) => {
+  const { f, run, resourceDir } = await prepared(t);
+  const h = workflowHarness(standardAgents({
+    "discovery:ldap": async () => ({ coverage: [], findings: [] }),
+    "target": async () => ({ requirements: Array.from({ length: outputLimits.requirements }, (_, i) => ({ ...targetOutput.requirements[0], requirement: `Requirement ${i + 1}.` })), exclusions: [] }),
+  }));
+  await assert.rejects(run(h.attempt()), isPause);
+  const approval = (await inspectWorkspace(f.configPath, "demo")).openDecisions[0];
+  const file = path.join(resourceDir, "target/target.json");
+  const target = JSON.parse(await readFile(file, "utf8"));
+  target.requirements.push({ id: "req-501", ...targetOutput.requirements[0], requirement: "Additional intended behavior." });
+  const edited = JSON.stringify(target);
+  await writeFile(file, edited);
+  await answerDecision(f.configPath, "demo", approval.id, "approve");
+  await assert.rejects(run(h.attempt()), { code: "agent-output-too-large" });
+  assert.equal(await readFile(file, "utf8"), edited);
+  const after = await inspectWorkspace(f.configPath, "demo");
+  assert.equal(after.status, "ready-for-target");
+  assert.equal(after.stages[1].status, "awaiting-decision");
+  assert.equal(after.stages[1].stale, true);
+});
+
+test("exact output limits retain every finding, coverage entry and requirement", async (t) => {
+  const { f } = await prepared(t);
+  const output = { coverage: Array.from({ length: outputLimits.coverage }, (_, i) => `Operation ${i}`), findings: Array.from({ length: outputLimits.findings }, () => structuredClone(pagesOutput.findings[0])) };
+  const baseline = await validateFindings("pages", output, f.repositories);
+  assert.equal(baseline.findings.length, outputLimits.findings);
+  assert.equal(baseline.coverage.length, outputLimits.coverage);
+  assert.equal(baseline.rejected.length, 0);
+  const target = validateTarget({ requirements: Array.from({ length: outputLimits.requirements }, () => structuredClone(targetOutput.requirements[0])), exclusions: [] }, baseline);
+  assert.equal(target.requirements.length, outputLimits.requirements);
+  assert.equal(target.rejected.length, 0);
+});
+
+test("evidence from the earlier routing policy is rechecked before it can report completion", async (t) => {
+  const { f, run, resourceDir } = await complete(t);
+  const file = path.join(resourceDir, "resource.json");
+  const record = JSON.parse(await readFile(file, "utf8"));
+  record.stages["01-legacy-discovery"].inputDigest = contentDigest(JSON.stringify({ decisions: [], baseline: null }));
+  await writeFile(file, JSON.stringify(record));
+  const stale = await inspectWorkspace(f.configPath, "demo");
+  assert.equal(stale.status, "ready-for-discovery");
+  assert.equal(stale.stages[1].blocked, true);
+  const fresh = workflowHarness(noScopeQuestions());
+  assert.equal((await run(fresh.attempt())).status, "complete");
+  assert.equal(fresh.agentCalls.filter((c) => c.options.label.startsWith("discovery:")).length, 2);
 });
