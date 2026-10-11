@@ -10,9 +10,9 @@ import { loadWorkspace } from "./workspace.mjs";
 
 function nextStatus(inspection: Pick<Inspection, "issues" | "resource" | "sourceFingerprint">): Pick<Inspection, "status" | "nextStep"> {
   const { resource, sourceFingerprint: fingerprint } = inspection;
-  if (inspection.issues.length || (resource && !fingerprint)) return { status: "blocked", nextStep: { id: "00-workspace-readiness", implemented: true } };
-  if (!resource) return { status: "needs-initialization", nextStep: { id: "00-workspace-readiness", implemented: true } };
-  if (resource.schemaVersion === 1) return { status: "needs-upgrade", nextStep: { id: "00-workspace-readiness", implemented: true } };
+  if (inspection.issues.length || (resource && !fingerprint)) return { status: "blocked", nextStep: { id: "00-mission-and-access", implemented: true } };
+  if (!resource) return { status: "needs-initialization", nextStep: { id: "00-mission-and-access", implemented: true } };
+  if (resource.schemaVersion === 1) return { status: "needs-upgrade", nextStep: { id: "00-mission-and-access", implemented: true } };
   const current = fingerprint as string;
   if (openDecisions(resource).length) return { status: "awaiting-decision", nextStep: { id: openDecisions(resource)[0]!.stage, implemented: true } };
   if (!isCurrent(resource, "01-legacy-discovery", current)) return { status: "ready-for-discovery", nextStep: { id: "01-legacy-discovery", implemented: true } };

@@ -14,7 +14,7 @@ test("inspection accepts unborn repositories and does not write even Git indexes
   assert.equal(result.repositories.length, 4);
   assert.ok(result.repositories.every((r) => r.head === null));
   assert.equal(result.migrationComplete, false);
-  assert.deepEqual(result.nextStep, { id: "00-workspace-readiness", implemented: true });
+  assert.deepEqual(result.nextStep, { id: "00-mission-and-access", implemented: true });
   assert.deepEqual(await treeBytes(f.root), before);
 });
 

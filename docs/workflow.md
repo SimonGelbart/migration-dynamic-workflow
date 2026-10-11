@@ -4,7 +4,7 @@ The canonical procedure for each step is linked below. Public documents describe
 
 | Step | Outcome |
 | --- | --- |
-| [00. Workspace readiness](steps/00-workspace-readiness.md) | Known configuration and initial resource state |
+| [00. Mission and access](steps/00-mission-and-access.md) | Agreed mission, known configuration and access, initial resource state |
 | [01. Legacy discovery](steps/01-legacy-discovery.md) | Evidence-backed baseline |
 | [02. Target definition](steps/02-target-definition.md) | Agreed intended behavior, separate from history |
 | [03. Contracts and validation](steps/03-contracts-and-validation.md) | Rule ownership, API contracts and capability gaps |

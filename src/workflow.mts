@@ -8,7 +8,7 @@ export type Operation = (typeof operations)[number];
 export type WorkflowInput = { operation: Operation; workspaceFile: string; resourceId: string };
 
 /** Step documents whose Status is Implemented. The documentation check enforces agreement in both directions. */
-export const implementedSteps = ["00-workspace-readiness", "01-legacy-discovery", "02-target-definition"] as const;
+export const implementedSteps = ["00-mission-and-access", "01-legacy-discovery", "02-target-definition"] as const;
 
 export function parseWorkflowInput(value: unknown): WorkflowInput {
   const input = object(value, "workflow arguments");
