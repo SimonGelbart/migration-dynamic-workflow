@@ -16,11 +16,11 @@ The complete, current baseline from [legacy discovery](01-legacy-discovery.md), 
 
 **Procedure**
 
-One agent assigns preserve/change/fix/remove/question dispositions to requirements, each referencing baseline finding IDs, and lists exclusions. Code rejects requirements without a known finding, an allowed disposition or, for question, a focused question. Open questions become decisions. When none remain, the workflow asks the owner to approve that exact target revision.
+One agent assigns preserve/change/fix/remove/question dispositions to requirements, each referencing baseline finding IDs, and lists exclusions. Code rejects requirements without a known finding, an allowed disposition or, for question, a focused question. Rejected requirements or no valid requirements keep the stage in progress and prevent approval. Open questions become decisions. When none remain, the workflow always asks the owner to approve that exact target revision, including intended UI behavior and differences.
 
 **Outputs**
 
-Private `target/target.json` and `target/target.md`, separate from the legacy baseline. The revision is a digest of the validated requirements and exclusions.
+Private `target/target.json` and `target/target.md`, separate from the legacy baseline. The revision is a digest of the validated requirements, exclusions, source fingerprint and baseline digest. Stored revision fields never select an approval: saved targets are validated and their revisions recomputed from their actual content.
 
 **Completion**
 
@@ -32,7 +32,7 @@ Questions pause at `decision/<resource>/02-target-definition/<decision>`. Answer
 
 **Recovery**
 
-A stale or regenerated baseline makes the target stale. A resumed checkpoint applies to the recorded target revision, not to an old approval flag: a new revision needs a new approval.
+A stale or changed baseline makes the target stale. Valid edits to saved target JSON are preserved, assigned a recomputed revision and presented for approval; invalid edits stop the operation without overwriting them. Missing JSON triggers generation, and missing or edited Markdown is rebuilt from validated JSON. Artifact digests are checked before reusing completion, and source/decision changes during generation discard the result. A new target revision needs its corresponding approval. Rejected agent output is retained for diagnosis; start a new run to obtain corrected output.
 
 **Next**
 

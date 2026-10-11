@@ -1,13 +1,12 @@
-import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { JsonValue, WorkflowContext, WorkflowJsonSchema } from "@github/copilot-sdk/extension";
 import { inspectWorkspace, updateResource } from "./inspect.mjs";
-import { object, repositoryRoles, WorkflowError, type Decision, type Inspection, type RepositoryRole, type ResourceRecord, type StageId, type StageSummary } from "./model.mjs";
-import { replaceFile } from "./resource.mjs";
-import { isBlocked, isCurrent, mergeDecisions, openDecisions, pauseKey, summarize, transition } from "./stages.mjs";
-import { isWithin } from "./workspace.mjs";
+import { hasCode, object, repositoryRoles, WorkflowError, type Decision, type Inspection, type RepositoryRole, type ResourceRecord, type StageId, type StageSummary } from "./model.mjs";
+import { privateFilePath, replaceFile } from "./resource.mjs";
+import { checkStageEvidence, contentDigest, decisionInputs, isBlocked, isCurrent, mergeDecisions, openDecisions, pauseKey, stageFiles, stageInputDigest, transition } from "./stages.mjs";
+import { canonicalPath, isWithin } from "./workspace.mjs";
 
 export type StageContext = Pick<WorkflowContext, "agent" | "step" | "pause" | "parallel" | "phase" | "log" | "signal" | "runId">;
 
@@ -22,9 +21,9 @@ export type Finding = {
   evidence: Evidence[]; question: string | null; affectsScope: boolean;
 };
 export type Rejection = { area: string; index: number; reason: string };
-export type Baseline = { schemaVersion: 1; resourceId: string; fingerprint: string; coverage: Record<string, string[]>; findings: Finding[]; rejected: Rejection[] };
+export type Baseline = { schemaVersion: 1; resourceId: string; fingerprint: string; inputDigest: string; coverage: Record<string, string[]>; findings: Finding[]; rejected: Rejection[] };
 export type Requirement = { id: string; findingIds: string[]; disposition: Disposition; requirement: string; question: string | null };
-export type Target = { schemaVersion: 1; resourceId: string; fingerprint: string; revision: string; inputs: string[]; requirements: Requirement[]; exclusions: string[]; rejected: Rejection[] };
+export type Target = { schemaVersion: 1; resourceId: string; fingerprint: string; baselineDigest: string; revision: string; inputs: string[]; requirements: Requirement[]; exclusions: string[]; rejected: Rejection[] };
 
 export type DiscoveryResult = {
   schemaVersion: 2;
@@ -48,8 +47,8 @@ export const discoveryAreas = [
   { id: "ldap", focus: "LDAP queries: filters, search base and scope, attribute mappings, additional in-code filtering, parent/child interactions and side effects (writes, deletes, notifications)" },
 ] as const;
 
-const baselineFiles = { json: "discovery/legacy.json", markdown: "discovery/legacy.md" };
-const targetFiles = { json: "target/target.json", markdown: "target/target.md" };
+const baselineFiles = stageFiles["01-legacy-discovery"];
+const targetFiles = stageFiles["02-target-definition"];
 const maxRounds = 8;
 
 const findingsSchema: WorkflowJsonSchema = {
@@ -102,9 +101,7 @@ const targetSchema: WorkflowJsonSchema = {
   },
 };
 
-function hash(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
+const hash = contentDigest;
 
 function text(value: unknown, max: number): string | null {
   return typeof value === "string" && value.trim().length > 0 && value.length <= max && !value.includes("\0") ? value.trim() : null;
@@ -128,6 +125,7 @@ async function checkEvidence(value: unknown, repositories: Record<RepositoryRole
   try {
     const info = await lstat(file);
     if (!info.isFile()) return `evidence ${role}:${relative} is not a regular file`;
+    if (!isWithin(await canonicalPath(file), repositories[role])) return `evidence ${role}:${relative} resolves outside its checkout`;
   } catch {
     return `evidence ${role}:${relative} does not exist`;
   }
@@ -198,13 +196,14 @@ function repositoryList(inspection: Inspection): string {
   return inspection.repositories.map((r) => `- ${r.role}: ${r.path}`).join("\n");
 }
 
-export function discoveryPrompt(resourceId: string, area: (typeof discoveryAreas)[number], inspection: Inspection): string {
+export function discoveryPrompt(resourceId: string, area: (typeof discoveryAreas)[number], inspection: Inspection, inputs: Decision[]): string {
   return [
     `You are a read-only legacy discovery agent for the resource "${resourceId}". Focus only on: ${area.focus}.`,
     `Follow the procedure in ${stepDocument("01-legacy-discovery.md")}.`,
     "Do not edit, create, delete, format, build or commit anything in these checkouts, and do not contact LDAP or other services. Any source change invalidates this run.",
     `Checkouts:\n${repositoryList(inspection)}`,
     "Identify the pages and operations belonging to this resource. If the resource boundary is unclear, report an unresolved finding with affectsScope true and a focused question.",
+    `Investigate the scope specified by these recorded owner answers, including any newly included pages, controls or operations. Do not merely append the answers to previous findings.\n${JSON.stringify(inputs.map(({ id, question, answer }) => ({ id, question, answer })))}`,
     "Return JSON only. coverage lists every page, control group or operation you inspected. Each finding states one behavior and is classified as:",
     "observed (seen at runtime), code-confirmed (read directly in source), inferred (reasoned from indirect evidence) or unresolved (unknown; ask a question).",
     "Evidence uses paths relative to the named checkout and must exist. Set affectsScope true only when the answer changes what belongs to the migration.",
@@ -257,12 +256,43 @@ function renderRejections(rejected: Rejection[]): string[] {
   return ["## Rejected agent output", "", ...rejected.map((r) => `- ${r.area} #${r.index}: ${r.reason}`), ""];
 }
 
-async function readPrivateJson<T>(directory: string, relative: string): Promise<T | null> {
+async function readPrivateJsonSnapshot<T>(directory: string, relative: string): Promise<{ value: T; digest: string } | null> {
+  const file = await privateFilePath(directory, relative);
   try {
-    return JSON.parse(await readFile(path.join(directory, relative), "utf8")) as T;
-  } catch {
-    return null;
+    const contents = await readFile(file, "utf8");
+    return { value: JSON.parse(contents) as T, digest: hash(contents) };
+  } catch (error) {
+    if (hasCode(error, "ENOENT")) return null;
+    throw new WorkflowError("invalid-stage-evidence", `Cannot parse ${relative}; inspect and correct it before rerunning.`, { cause: error });
   }
+}
+
+async function readPrivateJson<T>(directory: string, relative: string): Promise<T | null> {
+  return (await readPrivateJsonSnapshot<T>(directory, relative))?.value ?? null;
+}
+
+function targetRevision(target: Pick<Target, "fingerprint" | "baselineDigest" | "requirements" | "exclusions">): string {
+  return hash(JSON.stringify({ fingerprint: target.fingerprint, baselineDigest: target.baselineDigest, requirements: target.requirements, exclusions: target.exclusions })).slice(0, 12);
+}
+
+/** Saved target JSON is untrusted. Validate it and derive its revision from actual content. */
+function loadedTarget(output: unknown, baseline: Baseline, resourceId: string): Target {
+  if (output === null || typeof output !== "object" || Array.isArray(output)) throw new WorkflowError("invalid-stage-evidence", "Saved target must be an object; no approval can be applied.");
+  const value = object(output, "saved target");
+  if (value.schemaVersion !== 1 || value.resourceId !== resourceId || typeof value.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(value.fingerprint)
+    || typeof value.baselineDigest !== "string" || !/^[a-f0-9]{64}$/.test(value.baselineDigest)
+    || !Array.isArray(value.inputs) || value.inputs.some((id) => typeof id !== "string" || !/^[a-z0-9-]{1,64}$/.test(id))
+    || !Array.isArray(value.requirements) || !Array.isArray(value.exclusions) || !Array.isArray(value.rejected) || value.rejected.length) {
+    throw new WorkflowError("invalid-stage-evidence", "Saved target metadata is invalid or contains rejected output; correct it or remove it to regenerate.");
+  }
+  const checked = validateTarget(value, baseline);
+  if (checked.rejected.length || !checked.requirements.length
+    || checked.requirements.some((requirement, index) => object((value.requirements as unknown[])[index], "saved requirement").id !== requirement.id)
+    || JSON.stringify(checked.exclusions) !== JSON.stringify(value.exclusions)) {
+    throw new WorkflowError("invalid-stage-evidence", "Saved target requirements or exclusions are invalid; no approval can be applied.");
+  }
+  const target: Target = { schemaVersion: 1, resourceId, fingerprint: value.fingerprint, baselineDigest: value.baselineDigest, inputs: value.inputs as string[], revision: "", ...checked };
+  return { ...target, revision: targetRevision(target) };
 }
 
 async function currentState(workspaceFile: string, resourceId: string): Promise<{ inspection: Inspection; record: ResourceRecord; fingerprint: string; directory: string }> {
@@ -281,19 +311,33 @@ async function persistStage<T>(
   workspaceFile: string, resourceId: string, owner: string, stage: StageId, fingerprint: string,
   files: { json: string; markdown: string }, artifact: T | null, proposed: Decision[] | null,
   render: (artifact: T, decisions: Decision[]) => string, finalStatus: (record: ResourceRecord) => "awaiting-decision" | "complete" | "in-progress",
+  expectedInputs: string, expectedExistingDigest?: string,
 ): Promise<ResourceRecord> {
   return updateResource(workspaceFile, resourceId, owner, async (current, directory) => {
-    if (isBlocked(current, stage, fingerprint)) throw new WorkflowError("stage-blocked", `Stage ${stage} requires its predecessor to be complete for the current sources.`);
+    const live = await currentState(workspaceFile, resourceId);
+    if (live.fingerprint !== fingerprint || stageInputDigest(current, stage) !== expectedInputs) throw new WorkflowError("stage-inputs-changed", "Sources or decisions changed while the stage ran; rerun before saving.");
+    const health = await checkStageEvidence(current, directory);
+    if (isBlocked(current, stage, fingerprint, health)) throw new WorkflowError("stage-blocked", `Stage ${stage} requires its predecessor to be complete for the current sources and evidence.`);
+    if (expectedExistingDigest !== undefined) {
+      const file = await privateFilePath(directory, files.json);
+      if (hash(await readFile(file)) !== expectedExistingDigest) throw new WorkflowError("stage-inputs-changed", "Saved evidence changed during this attempt; rerun before applying a decision.");
+    }
     const now = new Date().toISOString();
     let record = proposed ? mergeDecisions(current, stage, proposed) : current;
     const stored = artifact ?? await readPrivateJson<T>(directory, files.json);
     if (stored === null) throw new WorkflowError("evidence-missing", `Stage ${stage} evidence ${files.json} is missing; rerun discovery.`);
-    if (artifact !== null) await replaceFile(path.join(directory, files.json), `${JSON.stringify(artifact, null, 2)}\n`);
-    await replaceFile(path.join(directory, files.markdown), render(stored, record.decisions.filter((d) => d.stage === stage)));
+    const json = `${JSON.stringify(stored, null, 2)}\n`;
+    const markdown = render(stored, record.decisions.filter((d) => d.stage === stage));
+    // Validate both destinations before the first write.
+    await privateFilePath(directory, files.json);
+    await privateFilePath(directory, files.markdown);
+    await replaceFile(path.join(directory, files.json), json, directory);
+    await replaceFile(path.join(directory, files.markdown), markdown, directory);
     const evidence = [files.json, files.markdown];
+    const digests = { [files.json]: hash(json), [files.markdown]: hash(markdown) };
     const status = record.stages[stage].status;
-    if (status === "not-started" || status === "complete") record = transition(record, stage, "in-progress", fingerprint, evidence, now);
-    return transition(record, stage, finalStatus(record), fingerprint, evidence, now);
+    if (status === "not-started" || status === "complete") record = transition(record, stage, "in-progress", fingerprint, evidence, now, digests);
+    return transition(record, stage, finalStatus(record), fingerprint, evidence, now, digests);
   });
 }
 
@@ -302,12 +346,16 @@ export async function discoverResource(ctx: StageContext, workspaceFile: string,
   const owner = `workflow run ${ctx.runId}`;
   let rediscovered = false;
   let rejectedFindings = 0;
-  const finish = (status: DiscoveryResult["status"], record: ResourceRecord, fingerprint: string, resourcePath: string): DiscoveryResult => ({
-    schemaVersion: 2, operation: "discover", status, resourcePath, stages: summarize(record, fingerprint), openDecisions: openDecisions(record),
-    staleEvidenceRediscovered: rediscovered, rejectedFindings,
-    nextStep: status === "complete" ? { id: "03-contracts-and-validation", implemented: false } : { id: openDecisions(record)[0]?.stage ?? "02-target-definition", implemented: true },
-    migrationComplete: false,
-  });
+  const finish = async (status: DiscoveryResult["status"]): Promise<DiscoveryResult> => {
+    const { inspection, record } = await currentState(workspaceFile, resourceId);
+    if (status === "complete" && inspection.status !== "ready-for-contracts") throw new WorkflowError("stage-inputs-changed", "Evidence or inputs changed before completion; rerun discovery.");
+    return {
+      schemaVersion: 2, operation: "discover", status, resourcePath: inspection.resourcePath, stages: inspection.stages, openDecisions: openDecisions(record),
+      staleEvidenceRediscovered: rediscovered, rejectedFindings,
+      nextStep: status === "complete" ? { id: "03-contracts-and-validation", implemented: false } : { id: openDecisions(record)[0]?.stage ?? "02-target-definition", implemented: true },
+      migrationComplete: false,
+    };
+  };
   /** Pause at a one-shot checkpoint. Returns false when a resumed attempt still has no recorded answer. */
   const awaitDecision = async (decision: Decision): Promise<boolean> => {
     ctx.log(`Decision needed (${decision.id}): ${decision.question} Record it with: npm run answer -- --workspace <workspace.json> --resource ${resourceId} --decision ${decision.id} --answer "<text>", then resume this run.`);
@@ -319,23 +367,26 @@ export async function discoverResource(ctx: StageContext, workspaceFile: string,
   for (let round = 0; round < maxRounds; round++) {
     ctx.signal.throwIfAborted();
     const { inspection, record, fingerprint, directory } = await currentState(workspaceFile, resourceId);
+    const health = await checkStageEvidence(record, directory);
     const legacy = record.stages["01-legacy-discovery"];
+    const legacyInputs = stageInputDigest(record, "01-legacy-discovery");
 
-    if (!isCurrent(record, "01-legacy-discovery", fingerprint)) {
+    if (!isCurrent(record, "01-legacy-discovery", fingerprint, health)) {
       ctx.phase("Legacy discovery");
-      const reusable = legacy.status === "awaiting-decision" && legacy.basedOnFingerprint === fingerprint;
+      const reusable = legacy.status === "awaiting-decision" && legacy.basedOnFingerprint === fingerprint && health["01-legacy-discovery"] === true && legacy.inputDigest === legacyInputs;
       let updated: ResourceRecord;
       if (reusable) {
-        // Apply recorded answers to the existing evidence; answers do not regenerate discovery.
+        // Only unanswered checkpoints can reuse unchanged evidence. New scope answers require investigation.
         updated = await persistStage<Baseline>(workspaceFile, resourceId, owner, "01-legacy-discovery", fingerprint, baselineFiles, null, null, renderBaseline,
-          (r) => openDecisions(r, "01-legacy-discovery").length ? "awaiting-decision" : "complete");
+          (r) => openDecisions(r, "01-legacy-discovery").length ? "awaiting-decision" : "complete", legacyInputs);
       } else {
         if (legacy.status !== "not-started") {
           rediscovered = true;
-          ctx.log("Sources changed since the discovery evidence was produced. It is stale and will be rediscovered; recorded answers are kept.");
+          ctx.log("Sources changed, scope answers changed, or discovery evidence is missing or edited. It will be rediscovered; recorded answers are kept.");
         }
         const short = fingerprint.slice(0, 12);
-        const outputs = await ctx.parallel(discoveryAreas.map((area) => () => ctx.agent(discoveryPrompt(resourceId, area, inspection), { label: `discovery:${area.id}:${short}`, schema: findingsSchema })));
+        const inputs = decisionInputs(record, "01-legacy-discovery");
+        const outputs = await ctx.parallel(discoveryAreas.map((area) => () => ctx.agent(discoveryPrompt(resourceId, area, inspection, inputs), { label: `discovery:${area.id}:${short}:${legacyInputs.slice(0, 12)}`, schema: findingsSchema })));
         ctx.signal.throwIfAborted();
         const failed = discoveryAreas.filter((_, index) => outputs[index] === null || outputs[index] === undefined).map((area) => area.id);
         if (failed.length) throw new WorkflowError("discovery-agent-failed", `Discovery produced no valid output for: ${failed.join(", ")}. Nothing was saved; resume or rerun.`);
@@ -343,11 +394,11 @@ export async function discoverResource(ctx: StageContext, workspaceFile: string,
         const after = await currentState(workspaceFile, resourceId);
         if (after.fingerprint !== fingerprint) throw new WorkflowError("sources-changed-during-discovery", "Sources changed while discovery agents ran. Nothing was saved; rerun discovery on stable sources.");
         const repositories = Object.fromEntries(inspection.repositories.map((r) => [r.role, r.path])) as Record<RepositoryRole, string>;
-        // Validated output is journaled under the source fingerprint, so a resume reuses it only for identical sources.
-        const baseline = await ctx.step(`discovery-baseline-v1-${fingerprint}`, async () => {
+        // Scope answers and sources both participate in the journal key.
+        const baseline = await ctx.step(`discovery-baseline-v2-${fingerprint}-${legacyInputs}`, async () => {
           const parts = await Promise.all(discoveryAreas.map((area, index) => validateFindings(area.id, outputs[index], repositories)));
           const result: Baseline = {
-            schemaVersion: 1, resourceId, fingerprint,
+            schemaVersion: 1, resourceId, fingerprint, inputDigest: legacyInputs,
             coverage: Object.fromEntries(discoveryAreas.map((area, index) => [area.id, parts[index]!.coverage])),
             findings: parts.flatMap((p) => p.findings), rejected: parts.flatMap((p) => p.rejected),
           };
@@ -355,60 +406,78 @@ export async function discoverResource(ctx: StageContext, workspaceFile: string,
         }) as unknown as Baseline;
         rejectedFindings = baseline.rejected.length;
         if (rejectedFindings) ctx.log(`${rejectedFindings} discovery finding(s) failed validation and are listed for review in ${baselineFiles.markdown}.`);
+        const insufficient = rejectedFindings > 0 || baseline.findings.length === 0 || !Object.values(baseline.coverage).some((items) => items.length);
         const proposed = baseline.findings.filter((f) => f.question && f.affectsScope).map((f) => questionDecision("01-legacy-discovery", f.question!, f.id));
         updated = await persistStage(workspaceFile, resourceId, owner, "01-legacy-discovery", fingerprint, baselineFiles, baseline, proposed, renderBaseline,
-          (r) => openDecisions(r, "01-legacy-discovery").length ? "awaiting-decision" : "complete");
+          (r) => insufficient ? "in-progress" : openDecisions(r, "01-legacy-discovery").length ? "awaiting-decision" : "complete", legacyInputs);
+        if (insufficient) throw new WorkflowError("invalid-agent-output", "Discovery has rejected findings or insufficient evidence. Review legacy.md and rerun with corrected output; an empty or excluded resource needs an explicit scope finding.");
       }
       const pending = openDecisions(updated, "01-legacy-discovery");
-      if (pending.length && !(await awaitDecision(pending[0]!))) return finish("awaiting-decision", updated, fingerprint, inspection.resourcePath);
+      if (pending.length && !(await awaitDecision(pending[0]!))) return finish("awaiting-decision");
       continue;
     }
 
     const target = record.stages["02-target-definition"];
-    if (!isCurrent(record, "02-target-definition", fingerprint)) {
+    if (!isCurrent(record, "02-target-definition", fingerprint, health)) {
       ctx.phase("Target definition");
-      const baseline = await readPrivateJson<Baseline>(directory, baselineFiles.json);
-      if (!baseline || baseline.fingerprint !== fingerprint) throw new WorkflowError("evidence-missing", `${baselineFiles.json} is missing or stale; rerun discovery.`);
+      const baselineSnapshot = await readPrivateJsonSnapshot<Baseline>(directory, baselineFiles.json);
+      const baseline = baselineSnapshot?.value ?? null;
+      if (!baseline || baseline.fingerprint !== fingerprint || baselineSnapshot!.digest !== legacy.evidenceDigests[baselineFiles.json]) throw new WorkflowError("evidence-missing", `${baselineFiles.json} is missing or stale; rerun discovery.`);
       // Approvals are not regeneration inputs; rejections and answered questions are.
-      const inputs = record.decisions.filter((d) => d.answer !== null && !(d.id.startsWith("approve-") && approved(d)));
+      const inputs = decisionInputs(record, "02-target-definition");
       const inputIds = inputs.map((d) => d.id).sort();
-      const previous = await readPrivateJson<Target>(directory, targetFiles.json);
-      const reusable = target.status === "awaiting-decision" && target.basedOnFingerprint === fingerprint && previous !== null && previous.fingerprint === fingerprint && JSON.stringify(previous.inputs) === JSON.stringify(inputIds);
+      const targetInputs = stageInputDigest(record, "02-target-definition");
+      const baselineDigest = legacy.evidenceDigests[baselineFiles.json]!;
+      const previousSnapshot = await readPrivateJsonSnapshot<Record<string, unknown>>(directory, targetFiles.json);
+      const previous = previousSnapshot?.value ?? null;
+      if (previousSnapshot && (target.status === "awaiting-decision" || target.status === "complete") && target.basedOnFingerprint === fingerprint && target.inputDigest === targetInputs) {
+        const checked = loadedTarget(previousSnapshot.value, baseline, resourceId);
+        if (checked.fingerprint !== fingerprint || checked.baselineDigest !== baselineDigest || JSON.stringify(checked.inputs) !== JSON.stringify(inputIds)) {
+          throw new WorkflowError("invalid-stage-evidence", "Saved target context was edited; inspect and correct it before rerunning.");
+        }
+      }
+      const reusable = (target.status === "awaiting-decision" || target.status === "complete") && target.basedOnFingerprint === fingerprint && previous !== null
+        && previous.fingerprint === fingerprint && previous.baselineDigest === baselineDigest && JSON.stringify(previous.inputs) === JSON.stringify(inputIds);
       let definition: Target;
+      let expectedExistingDigest: string | undefined;
       if (reusable) {
-        definition = previous;
+        definition = loadedTarget(previous, baseline, resourceId);
+        expectedExistingDigest = previousSnapshot!.digest;
       } else {
-        const output = await ctx.agent(targetPrompt(resourceId, baseline, inputs), { label: `target:${fingerprint.slice(0, 12)}`, schema: targetSchema });
+        const output = await ctx.agent(targetPrompt(resourceId, baseline, inputs), { label: `target:${fingerprint.slice(0, 12)}:${targetInputs.slice(0, 12)}`, schema: targetSchema });
         ctx.signal.throwIfAborted();
         if (output === null || output === undefined) throw new WorkflowError("target-agent-failed", "Target definition produced no valid output. Nothing was saved; resume or rerun.");
         const checked = validateTarget(output, baseline);
-        const revision = hash(JSON.stringify({ requirements: checked.requirements, exclusions: checked.exclusions })).slice(0, 12);
-        definition = { schemaVersion: 1, resourceId, fingerprint, revision, inputs: inputIds, ...checked };
+        definition = { schemaVersion: 1, resourceId, fingerprint, baselineDigest, revision: "", inputs: inputIds, ...checked };
+        definition.revision = targetRevision(definition);
         if (checked.rejected.length) ctx.log(`${checked.rejected.length} target requirement(s) failed validation and are listed for review in ${targetFiles.markdown}.`);
       }
+      const insufficient = definition.rejected.length > 0 || definition.requirements.length === 0;
       // A question already answered is an input to this revision, not a new question.
       const answeredIds = new Set(record.decisions.filter((d) => d.answer !== null).map((d) => d.id));
       const questions = definition.requirements.filter((r) => r.question).map((r) => questionDecision("02-target-definition", r.question!, r.id)).filter((d) => !answeredIds.has(d.id));
       const approval: Decision = { id: `approve-${definition.revision}`, stage: "02-target-definition", question: `Approve target revision ${definition.revision} in ${targetFiles.markdown}? Answer "approve", or explain what to change.`, source: definition.revision, answer: null, answeredAt: null };
-      const proposed = questions.length ? questions : [approval];
-      const updated = await persistStage(workspaceFile, resourceId, owner, "02-target-definition", fingerprint, targetFiles, reusable ? null : definition, proposed, renderTarget, (r) => {
+      const proposed = insufficient ? [] : questions.length ? questions : [approval];
+      const updated = await persistStage(workspaceFile, resourceId, owner, "02-target-definition", fingerprint, targetFiles, definition, proposed, renderTarget, (r) => {
+        if (insufficient) return "in-progress";
         if (openDecisions(r, "02-target-definition").length) return "awaiting-decision";
         if (questions.length) return "in-progress";
         return r.decisions.some((d) => d.id === approval.id && approved(d)) ? "complete" : "in-progress";
-      });
+      }, targetInputs, expectedExistingDigest);
+      if (insufficient) throw new WorkflowError("invalid-agent-output", "Target has rejected requirements or no valid requirements. Review target.md and rerun with corrected output before approval.");
       const pending = openDecisions(updated, "02-target-definition");
       if (pending.length) {
-        if (!(await awaitDecision(pending[0]!))) return finish("awaiting-decision", updated, fingerprint, inspection.resourcePath);
+        if (!(await awaitDecision(pending[0]!))) return finish("awaiting-decision");
         continue;
       }
-      if (updated.stages["02-target-definition"].status === "complete") return finish("complete", updated, fingerprint, inspection.resourcePath);
+      if (updated.stages["02-target-definition"].status === "complete") return finish("complete");
       if (!questions.length) {
         ctx.log(`Target revision ${definition.revision} was not approved. Run discover again to revise it using the recorded answer.`);
-        return finish("target-rejected", updated, fingerprint, inspection.resourcePath);
+        return finish("target-rejected");
       }
       continue;
     }
-    return finish("complete", record, fingerprint, inspection.resourcePath);
+    return finish("complete");
   }
   throw new WorkflowError("too-many-rounds", `Discovery did not settle after ${maxRounds} rounds. Inspect the resource and rerun.`);
 }

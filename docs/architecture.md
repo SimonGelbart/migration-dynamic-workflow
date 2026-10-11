@@ -22,11 +22,11 @@ Both entry points share the same ordinary core functions. Inspection invokes onl
 
 ## Records and evidence
 
-The private workspace contains configuration, `resources/<id>/resource.json` and each stage's artifacts beside it. Schema version 2 records a revision, the initialization fingerprint, a state per implemented stage (`not-started`, `in-progress`, `awaiting-decision` or `complete`), the evidence files and source fingerprint each stage was based on, and owner decisions. Staleness and blocking are computed on inspection, not stored: a stage is stale when the current sources or its predecessor's evidence differ from what it was based on. Unsupported or corrupt state blocks progress; it is not silently reset.
+The private workspace contains configuration, `resources/<id>/resource.json` and each stage's artifacts beside it. Schema version 2 records a revision, the initialization fingerprint, a state per implemented stage (`not-started`, `in-progress`, `awaiting-decision` or `complete`), evidence paths and content digests, the source fingerprint and decision-input digest each stage used, and owner decisions. Staleness and blocking are computed on inspection, not stored: a stage is stale when its sources, decision inputs, artifact bytes or predecessor evidence change. Inspection reads both required artifacts for each started stage; missing evidence never reports readiness. Older version-2 records without digests remain readable but must reestablish stage evidence. Unsupported or corrupt state blocks progress; it is not silently reset.
 
 Schema version 1 records are reported as `needs-upgrade`. Only the explicit upgrade operation converts one; it first copies the original bytes to `resource.v1.json` without overwriting, then writes version 2. Initialization creates version 2.
 
-Stage transitions are a fixed table in code. Agent output is data that code validates; it never selects a state. A stage cannot complete with open decisions, and a stage cannot start until its predecessor is complete for the current sources.
+Stage transitions are a fixed table in code. Agent output is data that code validates; it never selects a state. Rejected or empty discovery/target output is retained for diagnosis with the stage in progress; it cannot advance to approval or completion. A stage cannot complete with open decisions, and a stage cannot start until its predecessor is complete for the current sources, inputs and artifacts. Target revisions are recomputed from validated actual content and its source/baseline context, including after hand edits; old approvals do not authorize changed requirements.
 
 The fingerprint includes resolved workspace paths, Git HEAD, staged/unstaged differences and untracked nonignored file contents. It detects ordinary local edits without requiring a clean checkout. Ignored files, external services, tool versions, uncommitted contents inside submodules, and concurrent edits during a scan are outside this snapshot guarantee. A changed fingerprint makes stage evidence stale; it is never automatically accepted as verified work.
 
@@ -36,6 +36,8 @@ Initialization checks boundaries and publishes a fully written temporary record 
 
 Every later write (stage artifacts, record updates, upgrades and answers) holds the workspace writer lock: a `resourcesRoot/.writer.lock` directory created exclusively and naming its holder. Writers reread the record inside the lock and replace files by atomic rename, so concurrent answers are not lost. The lock is held only while writing, not while agents run or a run is paused; a writer that finds it held fails with the holder's name. The lock is never broken automatically: if no migration process is running, remove the directory by hand. The same lock will serialize writes to application checkouts when those stages exist.
 
+Artifact reads and writes validate every parent beneath the canonical private resource directory and reject links, redirected directories and nonregular destination files. Both stage destinations are checked before writing either. Stage persistence rechecks source/decision inputs and predecessor artifact hashes inside the lock. Reusing an edited target also checks that the JSON has not changed since it was validated. These checks cover ordinary local edits and redirected paths; they do not provide a transaction with external editors or defend against hostile concurrent filesystem replacement.
+
 ## Native runs, journal and checkpoints
 
 Copilot owns run IDs, run history, the step/agent journal and checkpoints. The resource record is authoritative for migration progress; a native checkpoint only says where a run stopped. When they disagree, the record and the current sources win. A resumed run restarts its body, rereads configuration, record and sources, and recomputes what to do. If the sources changed while paused, the affected evidence is stale and is produced again rather than continued.
@@ -43,8 +45,8 @@ Copilot owns run IDs, run history, the step/agent journal and checkpoints. The r
 Caching rules:
 
 - Never cached: configuration, the resource record, decisions, Git state and fingerprints. They are read outside `ctx.step`, every attempt.
-- Cached by the journal: agent results (memoized by prompt and options, and labeled with the source fingerprint) and validated discovery output (`ctx.step` key `discovery-baseline-v1-<fingerprint>`). A resume reuses them only for identical sources. Version a key when its producer's meaning changes.
-- Answers are inputs. The target prompt includes answered decisions, so a new answer produces a new agent call rather than replaying an old result.
+- Cached by the journal: agent results (memoized by prompt and options, labeled with source and stage-input digests) and validated discovery output (`ctx.step` key `discovery-baseline-v2-<fingerprint>-<inputDigest>`). A resume reuses them only for identical sources and scope inputs. Version a key when its producer's meaning changes.
+- Answers are inputs. Discovery includes answered scope decisions in its prompt and cache key and investigates the clarified boundary. Target generation includes answered decisions and the baseline digest in its cache inputs. Successful approvals are completion evidence, not regeneration instructions.
 
 Pause keys are `decision/<resourceId>/<stageId>/<decisionId>`. Decision IDs are `q-` plus a digest of the stage and question, so the same question keeps its ID and answer across rediscovery, or `approve-<target revision>`. A checkpoint is one-shot per run: a resumed attempt whose decision is still unanswered returns `awaiting-decision` instead of pausing again; start a new run after answering.
 

@@ -81,12 +81,19 @@ export function parseResource(value: unknown, expectedId: string): ResourceRecor
   keys(stagesValue, [...stageIds], "stages");
   const stages = Object.fromEntries(stageIds.map((id) => {
     const state = object(stagesValue[id], `stages.${id}`);
-    keys(state, ["status", "basedOnFingerprint", "evidence", "updatedAt"], `stages.${id}`);
+    keys(state, ["status", "basedOnFingerprint", "evidence", "updatedAt", ...["evidenceDigests", "inputDigest"].filter((key) => Object.hasOwn(state, key))], `stages.${id}`);
     if (!stageStatuses.includes(state.status as StageStatus)) throw new WorkflowError("invalid-resource-record", `stages.${id}.status is not a known status.`);
     if (!Array.isArray(state.evidence)) throw new WorkflowError("invalid-resource-record", `stages.${id}.evidence must be an array.`);
     const basedOnFingerprint = state.basedOnFingerprint === null ? null : digest(state.basedOnFingerprint, `stages.${id}.basedOnFingerprint`);
     if (state.status !== "not-started" && basedOnFingerprint === null) throw new WorkflowError("invalid-resource-record", `Started stage ${id} must record the fingerprint it was based on.`);
-    return [id, { status: state.status as StageStatus, basedOnFingerprint, evidence: state.evidence.map(evidencePath), updatedAt: nullableDate(state.updatedAt, `stages.${id}.updatedAt`) }];
+    const evidence = state.evidence.map(evidencePath);
+    const hashes = Object.hasOwn(state, "evidenceDigests") ? object(state.evidenceDigests, `stages.${id}.evidenceDigests`) : {};
+    const evidenceDigests = Object.fromEntries(Object.entries(hashes).map(([file, hash]) => {
+      if (!evidence.includes(file)) throw new WorkflowError("invalid-resource-record", `Digest ${file} must name a recorded evidence file.`);
+      return [file, digest(hash, `stages.${id}.evidenceDigests.${file}`)];
+    }));
+    const inputDigest = state.inputDigest === undefined || state.inputDigest === null ? null : digest(state.inputDigest, `stages.${id}.inputDigest`);
+    return [id, { status: state.status as StageStatus, basedOnFingerprint, evidence, evidenceDigests, inputDigest, updatedAt: nullableDate(state.updatedAt, `stages.${id}.updatedAt`) }];
   })) as ResourceRecord["stages"];
   if (!Array.isArray(record.decisions)) throw new WorkflowError("invalid-resource-record", "Resource decisions must be an array.");
   const decisions = record.decisions.map(parseDecision);
@@ -147,9 +154,11 @@ export async function createResource(file: string, record: ResourceRecord, signa
  * Atomically replace a private file (resource record or stage artifact). Callers must hold the writer lock.
  * Replacement is used only for the workflow's own records, never for application sources.
  */
-export async function replaceFile(file: string, contents: string): Promise<void> {
+export async function replaceFile(file: string, contents: string, privateRoot: string): Promise<void> {
+  await privateFilePath(privateRoot, path.relative(privateRoot, file));
   const directory = path.dirname(file);
   await mkdir(directory, { recursive: true });
+  await privateFilePath(privateRoot, path.relative(privateRoot, file));
   const temporary = path.join(directory, `.${path.basename(file)}-${randomUUID()}.tmp`);
   try {
     const handle = await open(temporary, "wx", 0o600);
@@ -159,10 +168,35 @@ export async function replaceFile(file: string, contents: string): Promise<void>
     } finally {
       await handle.close();
     }
+    await privateFilePath(privateRoot, path.relative(privateRoot, file));
     await rename(temporary, file);
   } finally {
     await unlink(temporary).catch((error: unknown) => { if (!hasCode(error, "ENOENT")) throw error; });
   }
+}
+
+/** Reject linked parents and linked files before reading or writing private artifacts. */
+export async function privateFilePath(directory: string, relative: string): Promise<string> {
+  const root = path.resolve(directory);
+  const file = path.resolve(root, relative);
+  if (!relative || /^[A-Za-z]:/.test(relative) || path.isAbsolute(relative) || !isWithin(file, root) || file === root) {
+    throw new WorkflowError("invalid-artifact-path", "Artifacts must stay inside the selected private resource directory.");
+  }
+  if (await canonicalPath(root) !== root) throw new WorkflowError("invalid-artifact-path", "The private resource directory was redirected.");
+  const parts = path.relative(root, file).split(path.sep);
+  let current = root;
+  for (const [index, part] of parts.entries()) {
+    current = path.join(current, part);
+    try {
+      const info = await lstat(current);
+      if (info.isSymbolicLink() || (index < parts.length - 1 ? !info.isDirectory() : !info.isFile())) {
+        throw new WorkflowError("invalid-artifact-path", `Artifact path ${relative} contains a link or an invalid file type.`);
+      }
+    } catch (error) {
+      if (!hasCode(error, "ENOENT")) throw error;
+    }
+  }
+  return file;
 }
 
 export function serialize(record: ResourceRecord): string {

@@ -603,7 +603,7 @@ sequenceDiagram
   W->>S: fingerprint sources (always reread)
   W->>R: read record (always reread)
   par read-only discovery
-    W->>P: prompt (step 01 doc, checkouts)
+    W->>P: prompt (step 01 doc, checkouts, scope answers)
     P->>S: read
     P-->>W: structured findings
   and
@@ -615,22 +615,25 @@ sequenceDiagram
   alt sources changed while agents ran
     W-->>O: error, nothing saved
   else
-    W->>W: validate findings, keep rejects for review
+    W->>W: validate findings; rejects or empty evidence stop progression
     W->>R: lock, write discovery/legacy.*, decisions, unlock
   end
   opt scope question
     W-->>O: pause at decision/RESOURCE-ID/01-legacy-discovery/QUESTION-ID
     O->>R: npm run answer
     O->>W: resume same run
+    W->>W: investigate answered scope with a new cache key
+    W->>R: persist revised findings and artifact digests
   end
   W->>T: baseline + answered decisions
   T-->>W: requirements with dispositions
-  W->>W: validate against baseline finding IDs
+  W->>W: validate finding links; reject empty or invalid requirements
   W->>R: lock, write target/target.*, decisions, unlock
   loop until approved
     W-->>O: pause for question or approve-REVISION
     O->>R: npm run answer
     O->>W: resume (or new run after a rejection)
+    W->>W: check artifact hashes; validate saved target and recompute revision
   end
   W-->>O: complete, next step 03 (planned)
 ```
@@ -663,7 +666,8 @@ Rules:
 
 - The resource record is authoritative. A native checkpoint only says where a run stopped.
 - Configuration, record, decisions and Git state are never cached in the workflow journal.
-- Agent results and validated output are cached only under keys that contain the source fingerprint.
+- Agent results and validated output are cached under keys containing source and decision-input digests; scope answers require another discovery pass.
+- Artifact hashes are reread before completion. Valid target edits receive a recomputed revision and require the corresponding approval; invalid edits cannot inherit approval.
 - Answers are never overwritten. A rejected target revision is answered with requested changes; the next run uses them.
 
 ## 7a. LDAP access
@@ -753,7 +757,7 @@ flowchart TD
   classDef planned stroke-dasharray: 5 5
 ```
 
-`resource.json` holds: revision, initial fingerprint, per-stage state, evidence paths and `basedOnFingerprint`, and decisions (question, source, answer, answer time).
+`resource.json` holds: revision, initial fingerprint, per-stage state, evidence paths and content digests, `basedOnFingerprint` and decision-input digest, and decisions (question, source, answer, answer time). Missing or edited artifacts invalidate completion. Scope answers trigger a new investigation; saved targets are validated and their content revisions recomputed before approval is applied.
 
 ## Open questions
 

@@ -5,18 +5,21 @@ import { snapshotRepository, workspaceFingerprint } from "./git.mjs";
 import { withWriterLock } from "./lock.mjs";
 import { hasCode, issue, nonempty, repositoryRoles, resourceId, WorkflowError, type Answer, type Initialization, type Inspection, type ResourceRecord, type Upgrade } from "./model.mjs";
 import { createResource, originalV1Name, parseResource, readResource, replaceFile, resourcePath, serialize } from "./resource.mjs";
-import { emptyStages, isCurrent, openDecisions, summarize } from "./stages.mjs";
+import { checkStageEvidence, emptyStages, openDecisions, summarize, type EvidenceHealth } from "./stages.mjs";
 import { loadWorkspace } from "./workspace.mjs";
 
-function nextStatus(inspection: Pick<Inspection, "issues" | "resource" | "sourceFingerprint">): Pick<Inspection, "status" | "nextStep"> {
+function nextStatus(inspection: Pick<Inspection, "issues" | "resource" | "sourceFingerprint">, health: EvidenceHealth): Pick<Inspection, "status" | "nextStep"> {
   const { resource, sourceFingerprint: fingerprint } = inspection;
   if (inspection.issues.length || (resource && !fingerprint)) return { status: "blocked", nextStep: { id: "00-mission-and-access", implemented: true } };
   if (!resource) return { status: "needs-initialization", nextStep: { id: "00-mission-and-access", implemented: true } };
   if (resource.schemaVersion === 1) return { status: "needs-upgrade", nextStep: { id: "00-mission-and-access", implemented: true } };
   const current = fingerprint as string;
-  if (openDecisions(resource).length) return { status: "awaiting-decision", nextStep: { id: openDecisions(resource)[0]!.stage, implemented: true } };
-  if (!isCurrent(resource, "01-legacy-discovery", current)) return { status: "ready-for-discovery", nextStep: { id: "01-legacy-discovery", implemented: true } };
-  if (!isCurrent(resource, "02-target-definition", current)) return { status: "ready-for-target", nextStep: { id: "02-target-definition", implemented: true } };
+  const stages = summarize(resource, current, health);
+  const next = stages.find((s) => s.status !== "complete" || s.stale);
+  if (next) {
+    if (!next.stale && openDecisions(resource, next.id).length) return { status: "awaiting-decision", nextStep: { id: next.id, implemented: true } };
+    return { status: next.id === "01-legacy-discovery" ? "ready-for-discovery" : "ready-for-target", nextStep: { id: next.id, implemented: true } };
+  }
   return { status: "ready-for-contracts", nextStep: { id: "03-contracts-and-validation", implemented: false } };
 }
 
@@ -40,15 +43,19 @@ export async function inspectWorkspace(workspaceFile: string, selectedId: string
   }
   let resource: Inspection["resource"] = null;
   try { resource = await readResource(file, id); } catch (error) { issues.push(issue(error)); }
+  let health: EvidenceHealth = {};
+  if (resource?.schemaVersion === 2) {
+    try { health = await checkStageEvidence(resource, path.dirname(file)); } catch (error) { issues.push(issue(error)); }
+  }
   const fingerprint = repositories.length === repositoryRoles.length ? workspaceFingerprint(workspace, repositories) : null;
   const initial = resource === null ? null : resource.schemaVersion === 1 ? resource.sourceFingerprint : resource.initialFingerprint;
   const base = { issues, resource, sourceFingerprint: fingerprint };
   return {
-    schemaVersion: 2, operation: "inspect", ...nextStatus(base),
+    schemaVersion: 2, operation: "inspect", ...nextStatus(base, health),
     workspacePath: workspace.configPath, repositories, resourcePath: file, resource,
     sourceFingerprint: fingerprint,
     sourcesChangedSinceInitialization: initial && fingerprint ? initial !== fingerprint : null,
-    stages: resource?.schemaVersion === 2 ? summarize(resource, fingerprint) : [],
+    stages: resource?.schemaVersion === 2 ? summarize(resource, fingerprint, health) : [],
     openDecisions: resource?.schemaVersion === 2 ? openDecisions(resource) : [],
     issues, migrationComplete: false,
   };
@@ -95,7 +102,7 @@ export async function updateResource(workspaceFile: string, id: string, owner: s
     if (next === current) return current;
     const stored = { ...next, revision: current.revision + 1 };
     parseResource(JSON.parse(serialize(stored)), id);
-    await replaceFile(file, serialize(stored));
+    await replaceFile(file, serialize(stored), path.dirname(file));
     return stored;
   });
 }
@@ -124,7 +131,7 @@ export async function upgradeResource(workspaceFile: string, selectedId: string)
       schemaVersion: 2, id, createdAt: current.createdAt, initialFingerprint: current.sourceFingerprint,
       revision: 1, stages: emptyStages(), decisions: [], upgradedFrom: originalV1Name,
     };
-    await replaceFile(file, serialize(record));
+    await replaceFile(file, serialize(record), path.dirname(file));
     return { schemaVersion: 2, operation: "upgrade", status: "upgraded", resourcePath: file, preservedOriginal: original, resource: record, migrationComplete: false };
   });
 }

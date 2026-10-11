@@ -2,7 +2,7 @@
 
 Run `npm ci` followed by `npm run check`. The check type-checks against the actual pinned SDK, builds JavaScript, runs real filesystem/Git/CLI tests, and checks documentation links and step structure. `npm run demo` exercises the foundation with synthetic local repositories. Test fixtures live in ignored `.local/test-fixtures/` and are removed after each case.
 
-Coverage includes relative paths and spaces, JSON/version errors, invalid identifiers, real worktrees, missing repositories, read-only inspection, concurrent idempotent initialization, corruption preservation, output boundaries and changes to staged/unstaged/untracked source. Record checks cover code-owned transitions, the explicit schemaVersion 1 upgrade, the writer lock and write-once answers. Discovery checks cover pause and resume through both decisions, an unanswered resume, a hand edit while paused, cancellation mid-stage, an agent changing sources, a failed agent and a rejected target. The documentation check also requires each step's Implemented status to match `implementedSteps` in the code.
+Coverage includes relative paths and spaces, JSON/version errors, invalid identifiers, real worktrees, missing repositories, read-only inspection, concurrent idempotent initialization, corruption preservation, output boundaries and changes to staged/unstaged/untracked source. Record checks cover code-owned transitions, the explicit schemaVersion 1 upgrade, the writer lock and write-once answers. Discovery checks cover pause/resume, clarified scope investigation in resumed and new runs, changed source, edited target approval, invalid target preservation, missing/edited artifacts, older version-2 records without digests, rejected/empty output, redirected artifact paths, cancellation, failed agents and rejected targets. The documentation check also requires each step's Implemented status to match `implementedSteps` in the code.
 
 Workflow tests call the real definition with a stand-in context (`workflowHarness` in `tests/helpers.mjs`) that models the documented journal and one-shot pause semantics, and returns scripted agent output. That is not a live Copilot run and says nothing about the quality of real agent output.
 
@@ -19,6 +19,15 @@ Workflow tests call the real definition with a stand-in context (`workflowHarnes
 Registration code follows the SDK's [workflow authoring guide](https://github.com/github/copilot-sdk/blob/main/nodejs/docs/workflows.md), [workflow types](https://github.com/github/copilot-sdk/blob/main/nodejs/src/workflow.ts), and [extension API](https://github.com/github/copilot-sdk/blob/main/nodejs/src/extension.ts). See also [GitHub's workflow instructions](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-dynamic-workflows).
 
 ## Current verification record
+
+Review fixes, local verification on 11 October 2026:
+
+| Check | Result |
+| --- | --- |
+| Linux, Node 24.19.0, TypeScript 6.0.3, SDK 1.0.19 | Type-check, build, 50 tests and documentation check passed; 19 documentation files checked |
+| Earlier failure reproductions | Regression tests confirm changed targets need the corresponding approval, scope answers trigger investigation, missing/edited artifacts invalidate readiness, rejected/empty output cannot complete, and linked artifact paths cannot redirect writes |
+| Native Copilot smoke check and Windows execution | Not run locally: Copilot CLI unavailable; Windows requires the CI matrix or a Windows environment |
+| Private application and development LDAP checks | Not run; live LDAP integration remains planned |
 
 Discovery increment, local verification on 10 October 2026:
 

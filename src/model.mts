@@ -23,6 +23,10 @@ export type StageState = {
   basedOnFingerprint: string | null;
   /** Paths relative to the resource directory. */
   evidence: string[];
+  /** Digests of the exact persisted artifact bytes; older version-2 records lack these. */
+  evidenceDigests: Record<string, string>;
+  /** Digest of decision inputs and, for the target, its baseline artifact. */
+  inputDigest: string | null;
   updatedAt: string | null;
 };
 export type Decision = {

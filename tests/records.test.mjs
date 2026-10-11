@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { answerDecision, initializeResource, inspectWorkspace, updateResource, upgradeResource } from "../.github/extensions/resource-migration/inspect.mjs";
@@ -7,6 +7,7 @@ import { emptyStages, transition } from "../.github/extensions/resource-migratio
 import { parseWorkflowInput } from "../.github/extensions/resource-migration/workflow.mjs";
 import { definition } from "../.github/extensions/resource-migration/workflow.mjs";
 import { fixture, workflowHarness } from "./helpers.mjs";
+import { replaceFile } from "../.github/extensions/resource-migration/resource.mjs";
 
 const a = "a".repeat(64);
 const b = "b".repeat(64);
@@ -92,4 +93,14 @@ test("invalid workflow arguments name the problem and the accepted values", () =
   const valid = { operation: "inspect", workspaceFile: "workspace.json", resourceId: "demo" };
   assert.throws(() => parseWorkflowInput({ ...valid, extra: 1 }), /unsupported fields: extra\. Expected: operation, workspaceFile, resourceId/);
   assert.throws(() => parseWorkflowInput({ ...valid, operation: "migrate" }), /Use one of: inspect, initialize, upgrade, discover/);
+});
+
+test("the write boundary rejects linked parents and files outside the private root", async (t) => {
+  const f = await fixture(t);
+  const initialized = await initializeResource(f.configPath, "demo");
+  const privateRoot = path.dirname(initialized.resourcePath);
+  await symlink(f.repositories.api, path.join(privateRoot, "discovery"), process.platform === "win32" ? "junction" : "dir");
+  await assert.rejects(replaceFile(path.join(privateRoot, "discovery/legacy.json"), "{}", privateRoot), { code: "invalid-artifact-path" });
+  await assert.rejects(replaceFile(path.join(f.repositories.api, "legacy.json"), "{}", privateRoot), { code: "invalid-artifact-path" });
+  await assert.rejects(access(path.join(f.repositories.api, "legacy.json")), { code: "ENOENT" });
 });

@@ -69,7 +69,9 @@ Use `operation: "initialize"` only when you intend to create the private record.
 npm run answer -- --workspace <workspace.json> --resource <id> --decision <decision-id> --answer "<text>"
 ```
 
-The target needs an explicit `approve` answer for its exact revision; any other answer is treated as requested changes for the next run. Edits made while a run is paused are detected on resume and the stale evidence is rediscovered. Rebuild after source changes and reload extensions with `/clear` or restart the session. A workflow run marked completed means its inspection/initialization finished, not that the migration did.
+The target needs an explicit `approve` answer for its actual content revision; any other answer is treated as requested changes. Answered scope questions trigger another discovery pass with those answers as inputs, even with unchanged sources. Inspection checks source/input fingerprints and the content digests of both stage artifacts. Missing or edited discovery evidence is rediscovered; valid target JSON edits are preserved and require approval for their recomputed revision. Invalid saved targets stop without overwriting them. Rejected or empty agent output is retained for review and cannot complete a stage; start a new run to obtain corrected output. Linked artifact directories or files block progress. Older version-2 records without artifact digests must reestablish evidence.
+
+Rebuild after source changes and reload extensions with `/clear` or restart the session. A workflow run marked completed means the selected operation finished, not that the migration did.
 
 The native integration needs a Copilot session eligible for dynamic workflows. See [verification and limitations](docs/verification.md) for what has actually been exercised and the remaining smoke check.
 
