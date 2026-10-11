@@ -56,4 +56,4 @@ Add an implemented stage's module, needed skill/template and meaningful checks t
 
 Keep a single `resource-migration` workflow with an `operation` argument until operation-specific arguments make one schema unwieldy. Extract the generic workspace, record, fingerprint and readiness parts only when a second workflow needs them.
 
-Windows is the full migration target. Linux can run orchestration tests and whatever analysis is supported by its available sources. Dev LDAP may later be an explicit read-only discovery profile; the local container remains the repeatable test environment. Neither LDAP access nor a new test harness is part of this skeleton.
+Windows is the full migration target. Linux can run orchestration tests and whatever analysis is supported by its available sources. Dev LDAP may later be an explicit read-only discovery profile; acceptance tests use a disposable LDAP (Testcontainers or the local container) as the repeatable test environment and never write to Dev LDAP. Neither LDAP access nor a new test harness is part of this skeleton.

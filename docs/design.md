@@ -114,15 +114,15 @@ flowchart TB
         P06 -- Verified --> O_PACKAGE
     end
 
-    subgraph S05["05 · Establish API acceptance against real development LDAP"]
+    subgraph S05["05 · Establish API acceptance against a disposable test LDAP"]
         E01["E01 · Inspect existing TUnit and HttpClient harness conventions"]
-        E02["E02 · Configure API and tests for the real development LDAP"]
-        E03["E03 · Identify existing read dependencies and necessary test mutations"]
-        E04{"E04 · Required test writes already authorized?"}
-        E05["E05 · Define owned test entries, isolation, setup and cleanup"]
+        E02["E02 · Configure API and tests for a disposable LDAP: Testcontainers or the local LDAP container"]
+        E03["E03 · Derive required directory structure, schema and seed data from discovery evidence"]
+        E04{"E04 · Test LDAP reproduces the structure and behavior the scenarios depend on?"}
+        E05["E05 · Define synthetic seed data, per-test isolation, setup and teardown"]
         E06["E06 · Implement scenarios asserting final intended behavior"]
         E07["E07 · Build, discover and execute required scenarios"]
-        E08["E08 · Check owned-data cleanup and account for residual test data"]
+        E08["E08 · Check isolation and teardown; no state leaks between scenarios or runs"]
         E09{"E09 · Execution complete and trustworthy?"}
         E10["E10 · Repair missing cases, test defects or harness defects"]
         E11["E11 · Classify every case and record its specific failure cause"]
@@ -132,7 +132,7 @@ flowchart TB
         O_PLAN[/"O_PLAN · Acceptance baseline and requirement-linked technical task queue"/]
 
         E01 --> E02 --> E03 --> E04
-        E04 -- Yes or no writes needed --> E05 --> E06 --> E07 --> E08 --> E09
+        E04 -- Yes --> E05 --> E06 --> E07 --> E08 --> E09
         E09 -- Test or harness defect --> E10 --> E06
         E09 -- Yes --> E11 --> E12 --> E13 --> E14 --> O_PLAN
     end
@@ -179,7 +179,7 @@ flowchart TB
         F02{"F02 · Further implementation or justified refactoring needed?"}
         F03["F03 · Create or reopen tasks with concrete acceptance criteria"]
         F04["F04 · Execute every required resource API scenario"]
-        F05["F05 · Account for every case and verify test-data cleanup"]
+        F05["F05 · Account for every case and verify test isolation"]
         F06{"F06 · All required cases pass on current source?"}
         F07["F07 · Classify failures, missing coverage and unavailable checks"]
         O_API[/"O_API · Complete API coverage and current passing evidence"/]
@@ -315,8 +315,8 @@ flowchart TB
     P06 -- Environment blocked --> B01
     O_PACKAGE --> E01
 
-    E04 -- No --> X01
-    E09 -- Environment or cleanup blocked --> B01
+    E04 -- Structure or behavior not reproducible --> X01
+    E09 -- Container or environment blocked --> B01
     E09 -- Contract ambiguity --> X01
     O_PLAN --> A01
 
@@ -334,7 +334,7 @@ flowchart TB
     F03 --> A01
     F07 -- Implementation defect --> F03
     F07 -- Missing or defective scenarios --> E06
-    F07 -- Environment or cleanup blocked --> B01
+    F07 -- Container or environment blocked --> B01
     F07 -- Target or contract defect --> I01
     O_API --> U01
 
@@ -378,7 +378,7 @@ flowchart TB
     I07 -- Resource completion --> V01
 
     classDef fix stroke-width:4px
-    class W06,W08,D06,D10,D15,T12,C14,A01,R01,U06,U08,U10,U14,U15,U18,X06,BUDGET,I05,I07 fix
+    class W06,W08,D06,D10,D15,T12,C14,E02,E03,E04,E05,E08,F05,A01,R01,U06,U08,U10,U14,U15,U18,X06,BUDGET,I05,I07 fix
 ```
 
 How to read it:
@@ -406,6 +406,7 @@ Changes made in review, highlighted with a thick border:
 | U18 | Build after duplicating pages | Catches broken copies before registration |
 | U06 | Register new pages in the existing feature flag; exit to X01 | The flag mechanism exists, but every new page must be registered |
 | U16 | Merged two exits that both went to I01 | Simplification |
+| S05, E02–E05, E08, F05 | Tests use a disposable LDAP (Testcontainers or the local LDAP container) seeded from discovery evidence; E04 asks whether it reproduces what the scenarios need | Tests never write to the development LDAP; a gap the container cannot reproduce becomes an owner decision (accept the limitation or verify elsewhere) |
 
 ## 1. Scope and actors
 
@@ -427,7 +428,8 @@ flowchart LR
     api[api<br/>V2 API]
     e2e[e2e<br/>TUnit / HttpClient]
   end
-  ldap[(Development LDAP)]
+  ldap[(Development LDAP<br/>read-only, discovery)]
+  tldap[(Test LDAP<br/>Testcontainers or local container)]:::planned
   wrap[Read-only LDAP wrapper]:::planned
 
   owner -- runs, answers decisions, edits code --> wf
@@ -438,18 +440,18 @@ flowchart LR
   agents -- read --> apps
   agents -. planned: single writer .-> apps
   e2e -. planned .-> api
-  api -. planned .-> ldap
+  api -. planned: in tests .-> tldap
   agents -. planned: search only .-> wrap -.-> ldap
-  e2e -. planned: owned test entries only .-> ldap
+  e2e -. planned: seeds and tears down .-> tldap
   classDef planned stroke-dasharray: 5 5
 ```
 
 - One workspace has four checkouts with fixed roles and one private resources directory. One resource is actively migrated per workspace.
 - The workflow and its agents run inside the owner's Copilot session. The CLI (`npm run ...`) offers the deterministic operations without agents.
 - The owner may edit any checkout at any time. The workflow detects this through source fingerprints; it never resets the owner's work.
-- The development LDAP is read through the read-only wrapper ([section 7a](#7a-ldap-access)). Acceptance tests may write only owned test entries, after the owner authorizes them (E04), and clean them up.
+- The development LDAP is read through the read-only wrapper ([section 7a](#7a-ldap-access)). Acceptance tests use a disposable LDAP (Testcontainers or the local LDAP container) seeded with synthetic data; they never touch the development LDAP.
 - The legacy application can run locally. Runtime checks (D10, U10, U14, U15) are owner checks from a prepared checklist; browser automation may be designed later.
-- Out of scope: intermediate pull requests, deployment, production rollout, any other development LDAP write.
+- Out of scope: intermediate pull requests, deployment, production rollout, any development LDAP write.
 
 ## 2. End-to-end stage flow
 
@@ -682,7 +684,7 @@ flowchart LR
 - **Why a wrapper rather than direct CLI calls.** It can only search, so writes are impossible by construction rather than by convention. It enforces the permitted search scope from W06, size and time limits, and credentials given only as references (a password file or environment variable, never in arguments, prompts or artifacts). Output is structured and reproducible, and errors are explicit, as for Git today.
 - **Backend.** `ldapsearch` (OpenLDAP client) is the default. If it is not available on Windows, the same interface can use a Node LDAP client instead; the choice stays inside the wrapper.
 - **Account.** A read-only account is still preferred; the wrapper does not replace it.
-- **Writes.** Acceptance-test writes (S05) go through the test harness, not the wrapper.
+- **Tests.** Acceptance tests (S05) do not use the wrapper or the development LDAP; they seed and query a disposable test LDAP through the test harness.
 
 ## 8. Implementation loop (planned: steps 05 to 08)
 
@@ -732,7 +734,7 @@ flowchart LR
 
 - At most two concurrent agents. Reviews read stable snapshots.
 - The lock names its holder and is never broken automatically.
-- Tests that mutate the development LDAP touch only owned test entries (E05), once authorized (E04), and run serially.
+- Tests mutate only the disposable test LDAP. Scenarios sharing one container are isolated (E05) or run serially.
 
 ## 10. Artifacts
 
@@ -763,17 +765,17 @@ Answered:
 - **Slice definition.** The owner validates functional slices with the contracts (C11); acceptance splits them into technical tasks (E13).
 - **Runtime observation and V2 verification.** The application runs locally; observation and UI verification are owner checks from a prepared checklist for now (D10, U10, U14, U15).
 - **LDAP access.** Through a small read-only wrapper; see [section 7a](#7a-ldap-access).
+- **Test LDAP.** Acceptance tests use Testcontainers or the local LDAP container, never the development LDAP; no test-write authorization is needed.
 - **Feature flag.** The mechanism exists; every new V2 page must be registered in it (U06).
 
 Still open:
 
-1. **Test-write authorization (E04).** Proposed default: authorize once per resource for a named owned subtree or naming prefix, recorded as a decision with the cleanup rule; any write outside it needs a new decision. Is that acceptable?
-2. **Contracts format (03).** Where do contracts live and in what form: private Markdown/JSON only, or also OpenAPI or C# interfaces in the API checkout?
-3. **Acceptance results (05).** Which result format does the TUnit run emit locally (TRX, JUnit XML, console only)? The adapter must read the real output.
-4. **Application commands.** What are the exact build and test commands for each checkout, on Windows and on Linux? Which of them can run on Linux at all?
-5. **LDAP server.** Which server and version is the development LDAP, and which AD-specific behaviors are needed? Is `ldapsearch` available on the Windows machine?
-6. **Retry budgets.** How many automatic attempts per repair loop before going to SB? Proposed: three, and immediately on a repeated identical failure.
-7. **Review cadence (07).** Keep "every three functional slices", or make it configurable per resource?
-8. **Commits.** Should the workflow ever create commits in application checkouts, or only leave working-tree changes for the owner?
-9. **Autonomy (increment 10).** Which owner decisions may later be automated, and which must always pause?
-10. **Multiple resources.** Is "one active resource per workspace" a hard rule enforced by code, or guidance?
+1. **Contracts format (03).** Where do contracts live and in what form: private Markdown/JSON only, or also OpenAPI or C# interfaces in the API checkout?
+2. **Acceptance results (05).** Which result format does the TUnit run emit locally (TRX, JUnit XML, console only)? The adapter must read the real output.
+3. **Application commands.** What are the exact build and test commands for each checkout, on Windows and on Linux? Which of them can run on Linux at all?
+4. **LDAP fidelity.** Which server and version is the development LDAP, and which image do the tests use? Which AD-specific behaviors must the test LDAP reproduce, and does the TUnit harness already start a container? Is `ldapsearch` available on the Windows machine?
+5. **Retry budgets.** How many automatic attempts per repair loop before going to SB? Proposed: three, and immediately on a repeated identical failure.
+6. **Review cadence (07).** Keep "every three functional slices", or make it configurable per resource?
+7. **Commits.** Should the workflow ever create commits in application checkouts, or only leave working-tree changes for the owner?
+8. **Autonomy (increment 10).** Which owner decisions may later be automated, and which must always pause?
+9. **Multiple resources.** Is "one active resource per workspace" a hard rule enforced by code, or guidance?

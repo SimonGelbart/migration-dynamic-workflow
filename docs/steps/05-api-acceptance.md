@@ -16,7 +16,7 @@ Contracts, rule IDs, actual TUnit/HttpClient harness, API run commands and local
 
 **Procedure**
 
-Inspect the installed harness before extending it. Keep each dependent HTTP journey in one scenario with assertions after meaningful calls. Own synthetic setup/cleanup and declare static data dependencies. Tests run against the development LDAP; they may write only owned test entries, after the owner has authorized those writes (proposed default: once per resource for a named owned subtree or naming prefix, recorded as a decision with its cleanup rule; anything outside needs a new decision), and must account for residual test data. Add a result adapter for the format actually emitted. Track case identities and failure causes, including expected unfinished behavior.
+Inspect the installed harness before extending it. Keep each dependent HTTP journey in one scenario with assertions after meaningful calls. Own synthetic setup/cleanup and declare static data dependencies. Tests run against a disposable LDAP, started with Testcontainers or the local LDAP container, never against the development LDAP. Derive the directory structure, schema and synthetic seed data from discovery evidence; isolate scenarios that share a container or run them serially, and check that no state leaks between runs. When the test LDAP cannot reproduce a behavior a scenario depends on (for example an AD-specific feature), record it as an owner decision instead of claiming coverage. Add a result adapter for the format actually emitted. Track case identities and failure causes, including expected unfinished behavior.
 
 **Outputs**
 
