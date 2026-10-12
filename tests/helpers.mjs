@@ -47,3 +47,58 @@ export async function treeBytes(directory) {
   await visit(directory);
   return result;
 }
+
+/**
+ * A small stand-in for the native workflow context. It models the documented journal semantics:
+ * agent calls are memoized by prompt and options, steps by key, and pause is a one-shot checkpoint
+ * that aborts the first attempt. It is not a live Copilot run.
+ */
+export function workflowHarness(agentImpl) {
+  const journal = new Map();
+  const checkpoints = new Set();
+  const agentCalls = [];
+  const pauses = [];
+  let attemptController;
+  const attempt = () => {
+    attemptController = new AbortController();
+    const logs = [];
+    const phases = [];
+    return {
+      runId: "run-test",
+      logs, phases,
+      signal: attemptController.signal,
+      controller: attemptController,
+      phase: (title) => phases.push(title),
+      log: (message) => logs.push(message),
+      async agent(prompt, options = {}) {
+        const key = `agent:${JSON.stringify([prompt, options])}`;
+        if (!journal.has(key)) {
+          agentCalls.push({ prompt, options });
+          journal.set(key, await agentImpl(prompt, options, attemptController));
+        }
+        return journal.get(key);
+      },
+      async step(key, producer) {
+        const id = `step:${key}`;
+        if (!journal.has(id)) journal.set(id, JSON.parse(JSON.stringify(await producer())));
+        return journal.get(id);
+      },
+      async pause(key) {
+        pauses.push(key);
+        if (checkpoints.has(key)) return;
+        checkpoints.add(key);
+        attemptController.abort();
+        throw new DOMException("paused", "AbortError");
+      },
+      async parallel(thunks) {
+        return Promise.all(thunks.map(async (thunk) => {
+          try { return await thunk(); } catch (error) {
+            if (error?.name === "AbortError") throw error;
+            return null;
+          }
+        }));
+      },
+    };
+  };
+  return { attempt, agentCalls, pauses };
+}

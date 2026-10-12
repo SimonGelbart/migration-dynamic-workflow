@@ -1,10 +1,10 @@
 # Workflow canvas
 
-The canonical procedure for each step is linked below. Public documents describe the method; private resource artifacts describe the actual legacy behavior and agreed target. Skills will reference the owning step, code enforces eligible transitions, and verification supplies evidence. Document existence alone does not establish completion.
+The canonical procedure for each step is linked below. Public documents describe the method; private resource artifacts describe the actual legacy behavior and agreed target. Skills will reference the owning step, code enforces eligible transitions, and verification supplies evidence. Document existence alone does not establish completion. [The workflow design](design.md) shows the whole flow, states and decision loop in diagrams.
 
 | Step | Outcome |
 | --- | --- |
-| [00. Workspace readiness](steps/00-workspace-readiness.md) | Known configuration and initial resource state |
+| [00. Mission and access](steps/00-mission-and-access.md) | Agreed mission, known configuration and access, initial resource state |
 | [01. Legacy discovery](steps/01-legacy-discovery.md) | Evidence-backed baseline |
 | [02. Target definition](steps/02-target-definition.md) | Agreed intended behavior, separate from history |
 | [03. Contracts and validation](steps/03-contracts-and-validation.md) | Rule ownership, API contracts and capability gaps |
@@ -34,6 +34,6 @@ The acceptance suite asserts final intended behavior. Known unfinished cases may
 
 Each slice has its own criteria and meaningful unit/integration evidence, even when a larger journey is still unfinished. Inspect applicable layer responsibilities without creating empty tests in every layer. All required resource API cases must pass before API completion and V2 integration.
 
-Manual edits between runs are expected. Recheck affected prerequisites and invalidate stale evidence; do not blindly reuse a checkpoint or reset user work. Versioned progress records describe verified outcomes, not agent confidence. The current skeleton has only an initialization fingerprint; later stages must implement their own evidence and resumption policies.
+Manual edits between runs are expected. Recheck affected prerequisites and invalidate stale evidence; do not blindly reuse a checkpoint or reset user work. Versioned progress records describe verified outcomes, not agent confidence. Discovery and target definition record the source fingerprint their evidence was based on, and become stale when it changes; later stages must implement their own evidence and resumption policies. See [the architecture](architecture.md) for how records, the workflow journal and pause checkpoints relate.
 
 Every step document uses Purpose, Inputs, Procedure, Outputs, Completion, Decisions, Recovery and Next fields, plus an honest implementation Status. A semantic review of coverage remains necessary even when structural checks pass.

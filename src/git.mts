@@ -17,7 +17,17 @@ async function git(directory: string, args: string[]): Promise<string> {
     });
     return result.stdout;
   } catch (error) {
-    throw new WorkflowError("git-check-failed", `Git inspection failed in ${directory}: ${args[0]}. Check Git availability, repository access and the 15-second/16-MiB inspection limits.`, { cause: error });
+    const failure = error as { code?: unknown; killed?: boolean; signal?: unknown };
+    if (failure.code === "ENOENT") {
+      throw new WorkflowError("git-unavailable", "Git was not found. Install Git and make sure it is on PATH for the Copilot and terminal sessions.", { cause: error });
+    }
+    if (failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+      throw new WorkflowError("git-output-too-large", `git ${args[0]} in ${directory} produced more than 16 MiB. Large untracked or generated files may need to be ignored.`, { cause: error });
+    }
+    if (failure.killed && failure.signal) {
+      throw new WorkflowError("git-timeout", `git ${args[0]} in ${directory} did not finish within 15 seconds. Check for a slow network drive, antivirus scanning or a very large working tree.`, { cause: error });
+    }
+    throw new WorkflowError("git-check-failed", `Git inspection failed in ${directory}: ${args[0]}. Check that the path is a readable Git checkout.`, { cause: error });
   }
 }
 

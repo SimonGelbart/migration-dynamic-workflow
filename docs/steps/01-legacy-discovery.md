@@ -4,7 +4,7 @@ Step ID: `01-legacy-discovery`. See [the workflow canvas](../workflow.md) for sh
 
 **Status**
 
-Planned.
+Implemented as the `discover` workflow operation, together with [target definition](02-target-definition.md). Its checks use a test stand-in for the workflow context; see [verification](../verification.md) for what has and has not run in a live Copilot session.
 
 **Purpose**
 
@@ -12,28 +12,32 @@ Build a thorough baseline of every workflow in the agreed resource boundary.
 
 **Inputs**
 
-Scoped resource, IHM source, linked pages and controls, available UI access, repository state and relevant existing V2 examples.
+An initialized schemaVersion 2 resource record, the four checkouts, relevant existing V2 examples and recorded owner decisions. Runtime UI access and Dev LDAP are not used by the current implementation.
 
 **Procedure**
 
-Trace pages/subpages, navigation, query strings, initial loads/postbacks, conditional fields, normalization, validation and messages. Follow actual LDAP filters, search scope, mappings and any additional filtering. Identify parent/child interactions and side effects. Attach evidence and classify findings as observed, code-confirmed, inferred or unresolved.
+The workflow rereads readiness, then starts two read-only agents in parallel: one for pages and controls, one for LDAP queries and mappings. Agents trace pages/subpages, navigation, query strings, initial loads/postbacks, conditional fields, normalization, validation and messages; LDAP filters, search scope, mappings and additional filtering; parent/child interactions and side effects. Each returns structured findings classified as observed, code-confirmed, inferred or unresolved, with source references and a coverage list. Agents must not edit, build or contact services. Planned (D06–D10): inspect the development LDAP's naming contexts, schema and representative entries through the read-only LDAP wrapper, and compare them with the application's filters and mappings; when runtime behavior is necessary, prepare a checklist for the owner to run against the locally running application and record the results as observed findings. LDAP observations stay in the private resource directory.
+
+Code then checks the output before saving it. Every reference must name a known checkout and an existing regular file that resolves inside it; classified findings need evidence; unresolved findings need a focused question. Invalid findings are listed as rejected agent output for review and keep the stage in progress. Empty findings or an empty coverage inventory also prevent progression; an excluded or empty resource needs an explicit evidence-backed scope finding and target disposition. If the source fingerprint or decision inputs changed while agents ran, nothing is saved.
+
+Each agent may return at most 300 findings and 500 coverage entries. Exceeding either limit fails with `agent-output-too-large` before saving anything; the workflow never accepts a truncated baseline. Agents must surface the need to split an oversized scope as a focused question rather than silently omit behavior.
 
 **Outputs**
 
-Private legacy.md plus a coverage inventory, evidence references and focused questions.
+Private `discovery/legacy.json` and `discovery/legacy.md` in the resource directory: coverage, findings with evidence, decisions and rejected output. Scope questions become decisions in `resource.json`.
 
 **Completion**
 
-Review significant branches against the page/operation inventory. Missing runtime observations and unknown behavior remain explicit. A long document or a file-existence check cannot prove completeness.
+Code moves the stage to complete only when its evidence is based on the current sources and scope answers, contains valid findings and coverage with no rejected output, and no scope decision is open. Persisted JSON and Markdown have recorded content digests; missing or modified evidence is stale. Review significant branches against the coverage inventory. Missing runtime observations and unknown behavior remain explicit. Structural validation cannot prove completeness; the [reference evaluation](../implementation-plan.md) checks quality.
 
 **Decisions**
 
-Ask about missing scope, contradictory behavior and inaccessible evidence when they affect coverage. Optional Dev LDAP exploration is read-only and explicitly configured.
+An unresolved finding marked as affecting scope pauses the run at `decision/<resource>/01-legacy-discovery/<decision>`. Record the answer with `npm run answer`, then resume the same run or start a new run. Clarifications and rejection feedback from either discovery or target definition become discovery prompt inputs and change the discovery cache key. The agents investigate the clarified boundary even when source files are unchanged, before the target can be regenerated or approved. This conservative policy also investigates target feedback that ultimately leaves scope unchanged. Successful approvals do not trigger another investigation. Target intent remains distinct from source-confirmed legacy behavior.
 
 **Recovery**
 
-Reuse valid findings; recheck affected evidence after source changes. Record corrections to historical facts separately from intentional V2 changes.
+Resuming reuses journaled agent output only for identical sources and decision inputs under the current validation policy. Source or input changes, or missing/edited discovery artifacts, cause rediscovery; recorded answers are kept by question. Older version-2 records without artifact/input digests or produced under the earlier routing/truncation policy must reestablish evidence. Cancellation, oversized output or an agent failure saves nothing. Rejected findings are saved for diagnosis but never complete a stage; start a new run to obtain corrected agent output. Linked artifact paths block reads and writes. Record corrections to historical facts separately from intentional V2 changes.
 
 **Next**
 
-[Target definition](02-target-definition.md).
+[Target definition](02-target-definition.md), in the same run.

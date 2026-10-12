@@ -16,7 +16,7 @@ Green required API evidence, legacy page inventory, target UI conventions and ex
 
 **Procedure**
 
-Copy pages completely with V2 suffixes, including required code-behind/designer/directive changes. Update naming, navigation and bindings. Connect operations incrementally, then verify coherent workflows, postbacks, validation/errors and parent/child interactions. Verify local legacy/V2 feature-flag routing.
+Copy pages completely with V2 suffixes, including required code-behind/designer/directive changes. Update naming, navigation and bindings. Connect operations incrementally, then verify coherent workflows, postbacks, validation/errors and parent/child interactions. Build after copying. Register every new V2 page in the existing feature-flag mechanism and verify local legacy/V2 routing. Until UI automation is designed, interaction and journey checks are owner checks from a prepared checklist against the locally running application; record each result.
 
 **Outputs**
 

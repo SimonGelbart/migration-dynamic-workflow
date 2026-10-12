@@ -14,7 +14,7 @@ test("inspection accepts unborn repositories and does not write even Git indexes
   assert.equal(result.repositories.length, 4);
   assert.ok(result.repositories.every((r) => r.head === null));
   assert.equal(result.migrationComplete, false);
-  assert.equal(result.nextStep.implemented, false);
+  assert.deepEqual(result.nextStep, { id: "00-mission-and-access", implemented: true });
   assert.deepEqual(await treeBytes(f.root), before);
 });
 
@@ -53,7 +53,8 @@ test("initialization persists one complete record and preserves it across repeat
   const f = await fixture(t);
   const first = await initializeResource(f.configPath, "demo");
   assert.equal(first.status, "created");
-  assert.equal(first.resource.status, "not-started");
+  assert.equal(first.resource.schemaVersion, 2);
+  assert.ok(Object.values(first.resource.stages).every((stage) => stage.status === "not-started"));
   const bytes = await readFile(first.resourcePath, "utf8");
   const again = await initializeResource(f.configPath, "demo");
   assert.equal(again.status, "already-exists");
@@ -84,7 +85,7 @@ test("cancellation during readiness does not publish a resource record", async (
 test("corrupt or unsupported existing resource records block progress and remain untouched", async (t) => {
   const f = await fixture(t);
   const initial = await initializeResource(f.configPath, "demo");
-  for (const contents of ["{broken", JSON.stringify({ ...initial.resource, schemaVersion: 99 }), JSON.stringify({ ...initial.resource, status: "completed" }), JSON.stringify({ ...initial.resource, id: "another" })]) {
+  for (const contents of ["{broken", JSON.stringify({ ...initial.resource, schemaVersion: 99 }), JSON.stringify({ ...initial.resource, stages: { ...initial.resource.stages, "01-legacy-discovery": { ...initial.resource.stages["01-legacy-discovery"], status: "completed" } } }), JSON.stringify({ ...initial.resource, id: "another" })]) {
     await writeFile(initial.resourcePath, contents);
     assert.equal((await inspectWorkspace(f.configPath, "demo")).status, "blocked");
     await assert.rejects(initializeResource(f.configPath, "demo"), { code: "workspace-blocked" });
@@ -125,5 +126,5 @@ test("fingerprints detect tracked, staged and untracked content changes without 
   await writeFile(path.join(f.repositories.api, "untracked.txt"), "two");
   const edited = await inspectWorkspace(f.configPath, "demo");
   assert.notEqual(untracked.sourceFingerprint, edited.sourceFingerprint);
-  assert.equal(JSON.parse(await readFile(initial.resourcePath, "utf8")).sourceFingerprint, initial.resource.sourceFingerprint);
+  assert.equal(JSON.parse(await readFile(initial.resourcePath, "utf8")).initialFingerprint, initial.resource.initialFingerprint);
 });

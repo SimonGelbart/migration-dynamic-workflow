@@ -15,6 +15,8 @@
     "check": "npm run typecheck && npm test && node scripts/check-docs.mjs",
     "inspect": "node .github/extensions/resource-migration/cli.mjs inspect",
     "initialize": "node .github/extensions/resource-migration/cli.mjs initialize",
+    "upgrade": "node .github/extensions/resource-migration/cli.mjs upgrade",
+    "answer": "node .github/extensions/resource-migration/cli.mjs answer",
     "predemo": "npm run build",
     "demo": "node scripts/demo.mjs"
   },
